@@ -1,0 +1,854 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Request {
+    pub repo: String,
+    pub action: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub fingerprint: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileStatus {
+    path: String,
+    old_path: Option<String>,
+    index: String,
+    worktree: String,
+    conflict: bool,
+}
+
+pub fn command(repo: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(repo)
+        .args([
+            "--no-pager",
+            "-c",
+            "core.quotepath=false",
+            "-c",
+            "color.ui=false",
+        ])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_LITERAL_PATHSPECS", "1");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd
+}
+
+fn bytes(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    let mut cmd = command(repo);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if input.is_some() {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Cannot start Git: {e}"))?;
+    if let Some(input) = input {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input)
+            .map_err(|e| e.to_string())?;
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(out.stdout)
+}
+fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
+    Ok(String::from_utf8_lossy(&bytes(repo, args, None)?).into_owned())
+}
+fn root(repo: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(repo);
+    let value = git(&path, &["rev-parse", "--show-toplevel"])?;
+    fs::canonicalize(value.trim()).map_err(|e| e.to_string())
+}
+fn oid(repo: &Path, value: &str) -> Result<String, String> {
+    if value.is_empty() || value.starts_with('-') || value.contains('\0') {
+        return Err("Choose a valid commit or branch.".into());
+    }
+    Ok(git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{value}^{{commit}}"),
+        ],
+    )?
+    .trim()
+    .into())
+}
+fn branch(repo: &Path, value: &str) -> Result<(), String> {
+    if value.starts_with('-') || value.contains('\0') {
+        return Err("Invalid branch name.".into());
+    }
+    git(repo, &["check-ref-format", "--branch", value]).map(|_| ())
+}
+fn relative(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.contains('\0')
+        || value.contains(':')
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.split(['/', '\\']).any(|s| s == "..")
+    {
+        return Err("Choose a file inside this worktree.".into());
+    }
+    Ok(())
+}
+fn file_path(repo: &Path, value: &str) -> Result<PathBuf, String> {
+    relative(value)?;
+    let path = fs::canonicalize(repo.join(value)).map_err(|e| e.to_string())?;
+    if !path.starts_with(repo) {
+        return Err("File resolves outside this worktree.".into());
+    }
+    Ok(path)
+}
+fn status(repo: &Path) -> Result<Vec<FileStatus>, String> {
+    let raw = bytes(
+        repo,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        None,
+    )?;
+    let mut fields = raw.split(|b| *b == 0).filter(|s| !s.is_empty());
+    let mut result = Vec::new();
+    while let Some(field) = fields.next() {
+        if field.len() < 4 {
+            continue;
+        }
+        let x = field[0] as char;
+        let y = field[1] as char;
+        let path = String::from_utf8_lossy(&field[3..]).into_owned();
+        let old_path = if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+            fields
+                .next()
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+        } else {
+            None
+        };
+        result.push(FileStatus {
+            path,
+            old_path,
+            index: x.to_string(),
+            worktree: y.to_string(),
+            conflict: x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D'),
+        });
+    }
+    Ok(result)
+}
+fn fingerprint(repo: &Path, path: &str) -> Result<String, String> {
+    fingerprint_content(repo, path, file_content(repo, path)?.as_deref())
+}
+fn file_content(repo: &Path, path: &str) -> Result<Option<Vec<u8>>, String> {
+    relative(path)?;
+    match fs::symlink_metadata(repo.join(path)) {
+        Ok(meta) if meta.is_symlink() => Ok(Some(
+            fs::read_link(repo.join(path))
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .as_bytes()
+                .to_vec(),
+        )),
+        Ok(meta) if meta.is_dir() => {
+            Err("Directory and submodule staging is not supported yet.".into())
+        }
+        Ok(_) => fs::read(repo.join(path))
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+fn fingerprint_content(repo: &Path, path: &str, content: Option<&[u8]>) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    hash.update(bytes(
+        repo,
+        &["ls-files", "--stage", "-z", "--", path],
+        None,
+    )?);
+    match content {
+        Some(content) => {
+            hash.update(b"present\0");
+            hash.update(content);
+        }
+        None => hash.update(b"missing\0"),
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+fn check_fingerprint(repo: &Path, req: &Request) -> Result<(), String> {
+    if req.fingerprint.is_empty() || fingerprint(repo, &req.path)? != req.fingerprint {
+        return Err(
+            "This file changed since you reviewed it. Refresh the diff and try again.".into(),
+        );
+    }
+    Ok(())
+}
+fn records(text: &str) -> Vec<Value> {
+    text.split('\0').filter_map(|record| {
+        let values: Vec<_> = record.trim_start_matches(['\r', '\n']).split('\x1f').collect();
+        (values.len() >= 6).then(|| json!({"id":values[0], "parents":values[1], "author":values[2], "date":values[3], "refs":values[4], "subject":values[5]}))
+    }).collect()
+}
+fn history(repo: &Path, path: &str, search: &str) -> Result<Value, String> {
+    let mut args = vec![
+        "log",
+        "--topo-order",
+        "-150",
+        "--date=iso-strict",
+        "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%D%x1f%s%x00",
+    ];
+    if path.is_empty() {
+        args.push("--all");
+    }
+    if !search.is_empty() {
+        args.extend(["--fixed-strings", "--regexp-ignore-case", "--grep", search]);
+    }
+    if !path.is_empty() {
+        relative(path)?;
+        args.extend(["--follow", "--", path]);
+    }
+    match git(repo, &args) {
+        Ok(out) => Ok(json!(records(&out))),
+        Err(_) if git(repo, &["rev-parse", "--verify", "HEAD"]).is_err() => Ok(json!([])),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn execute(req: Request) -> Result<Value, String> {
+    let repo = root(&req.repo)?;
+    let value = match req.action.as_str() {
+        "snapshot" => {
+            let files = status(&repo)?;
+            let refs = git(
+                &repo,
+                &[
+                    "for-each-ref",
+                    "--format=%(refname)%09%(objectname)%09%(HEAD)%09%(upstream:short)",
+                    "refs/heads",
+                    "refs/remotes",
+                    "refs/tags",
+                ],
+            )?;
+            let refs: Vec<_> = refs
+                .lines()
+                .filter_map(|line| {
+                    let f: Vec<_> = line.split('\t').collect();
+                    (f.len() >= 4)
+                        .then(|| json!({"name":f[0],"id":f[1],"current":f[2]=="*","upstream":f[3]}))
+                })
+                .collect();
+            let branch = git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+                .unwrap_or_else(|_| "Detached HEAD".into());
+            let worktrees = git(&repo, &["worktree", "list", "--porcelain"])?;
+            let worktrees: Vec<_> = worktrees
+                .split("\n\n")
+                .filter_map(|block| {
+                    let path = block.lines().find_map(|l| l.strip_prefix("worktree "))?;
+                    let branch = block
+                        .lines()
+                        .find_map(|l| l.strip_prefix("branch refs/heads/"))
+                        .unwrap_or("Detached HEAD");
+                    Some(json!({"path":path,"branch":branch}))
+                })
+                .collect();
+            let gitdir = git(&repo, &["rev-parse", "--absolute-git-dir"])?;
+            let gitdir = Path::new(gitdir.trim());
+            let operation =
+                if gitdir.join("rebase-merge").exists() || gitdir.join("rebase-apply").exists() {
+                    "rebase"
+                } else if gitdir.join("MERGE_HEAD").exists() {
+                    "merge"
+                } else if gitdir.join("CHERRY_PICK_HEAD").exists() {
+                    "cherry-pick"
+                } else if gitdir.join("REVERT_HEAD").exists() {
+                    "revert"
+                } else {
+                    ""
+                };
+            let stashes = git(&repo, &["stash", "list", "--format=%gd%x09%s"])?;
+            let remotes = git(&repo, &["remote", "-v"])?;
+            json!({"root":repo.to_string_lossy().trim_start_matches("\\\\?\\"),"branch":branch.trim(),"files":files,"refs":refs,"worktrees":worktrees,"operation":operation,"stashes":stashes,"remotes":remotes,"head":git(&repo,&["rev-parse","--verify","HEAD"]).unwrap_or_default().trim()})
+        }
+        "history" => history(&repo, &req.path, &req.text)?,
+        "diff" => {
+            relative(&req.path)?;
+            let before = fingerprint(&repo, &req.path)?;
+            let mut args = vec![
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--unified=3",
+            ];
+            let target;
+            if req.mode == "staged" {
+                args.push("--cached");
+            } else if req.mode == "branch" {
+                let base = oid(&repo, &req.target)?;
+                target = git(&repo, &["merge-base", "HEAD", &base])?
+                    .trim()
+                    .to_string();
+                args.push(&target);
+            }
+            args.extend(["--", &req.path]);
+            let mut diff = git(&repo, &args)?;
+            if diff.is_empty()
+                && req.mode == "working"
+                && git(&repo, &["ls-files", "--error-unmatch", "--", &req.path]).is_err()
+            {
+                let content = fs::read(file_path(&repo, &req.path)?).map_err(|e| e.to_string())?;
+                if content.contains(&0) {
+                    diff = "Binary file (untracked)".into();
+                } else {
+                    let text = String::from_utf8_lossy(&content);
+                    let lines: Vec<_> = text.split_inclusive('\n').collect();
+                    diff = format!("diff --git a/{0} b/{0}\nnew file mode 100644\n--- /dev/null\n+++ b/{0}\n@@ -0,0 +1,{1} @@\n", req.path, lines.len());
+                    for line in lines {
+                        diff.push('+');
+                        diff.push_str(line);
+                        if !line.ends_with('\n') {
+                            diff.push_str("\n\\ No newline at end of file\n");
+                        }
+                    }
+                }
+            }
+            if before != fingerprint(&repo, &req.path)? {
+                return Err(
+                    "File changed while loading. Refresh to review its current content.".into(),
+                );
+            }
+            json!({"text":diff,"fingerprint":before})
+        }
+        "branch-files" => {
+            let base = oid(&repo, &req.target)?;
+            let base = git(&repo, &["merge-base", "HEAD", &base])?;
+            let out = bytes(
+                &repo,
+                &["diff", "--name-only", "-z", base.trim(), "--"],
+                None,
+            )?;
+            json!(out
+                .split(|b| *b == 0)
+                .filter(|b| !b.is_empty())
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .collect::<Vec<_>>())
+        }
+        "commit-diff" => {
+            let target = oid(&repo, &req.target)?;
+            json!(git(
+                &repo,
+                &[
+                    "show",
+                    "--format=fuller",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    &target,
+                    "--"
+                ]
+            )?)
+        }
+        "commit-message" => {
+            let target = oid(&repo, &req.target)?;
+            json!(git(&repo, &["show", "-s", "--format=%B", &target])?)
+        }
+        "stage" | "unstage" => {
+            check_fingerprint(&repo, &req)?;
+            if req.action == "stage" {
+                // Stage the reviewed bytes, not a later version an agent may write
+                // between the fingerprint check and Git opening the file.
+                let content = file_content(&repo, &req.path)?;
+                if fingerprint_content(&repo, &req.path, content.as_deref())? != req.fingerprint {
+                    return Err("The file changed. Refresh before staging.".into());
+                }
+                if let Some(content) = content {
+                    let index = git(&repo, &["ls-files", "--stage", "--", &req.path])?;
+                    if index.is_empty()
+                        && git(&repo, &["check-ignore", "--quiet", "--", &req.path]).is_ok()
+                    {
+                        return Err("This file is ignored by Git.".into());
+                    }
+                    let meta =
+                        fs::symlink_metadata(repo.join(&req.path)).map_err(|e| e.to_string())?;
+                    let mut mode = if meta.is_symlink() {
+                        "120000"
+                    } else if index.starts_with("100755") {
+                        "100755"
+                    } else {
+                        "100644"
+                    };
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if !meta.is_symlink() {
+                            mode = if meta.permissions().mode() & 0o111 != 0 {
+                                "100755"
+                            } else {
+                                "100644"
+                            };
+                        }
+                    }
+                    let hash_args = if meta.is_symlink() {
+                        vec!["hash-object", "-w", "--stdin"]
+                    } else {
+                        vec!["hash-object", "-w", "--stdin", "--path", &req.path]
+                    };
+                    let blob = bytes(&repo, &hash_args, Some(&content))?;
+                    let blob = String::from_utf8_lossy(&blob);
+                    git(
+                        &repo,
+                        &[
+                            "update-index",
+                            "--add",
+                            "--cacheinfo",
+                            mode,
+                            blob.trim(),
+                            &req.path,
+                        ],
+                    )?;
+                } else {
+                    git(&repo, &["update-index", "--force-remove", "--", &req.path])?;
+                }
+            } else if git(&repo, &["rev-parse", "--verify", "HEAD"]).is_ok() {
+                git(&repo, &["restore", "--staged", "--", &req.path])?;
+            } else {
+                git(&repo, &["rm", "--cached", "--", &req.path])?;
+            }
+            json!("Index updated")
+        }
+        "patch" => {
+            check_fingerprint(&repo, &req)?;
+            if !req.text.starts_with("diff --git ") || req.text.matches("diff --git ").count() != 1
+            {
+                return Err("Expected a single-file patch.".into());
+            }
+            // Let Git decode quoted/unusual filenames, then require exactly the reviewed path.
+            let stat = bytes(
+                &repo,
+                &["apply", "--numstat", "-z", "--recount"],
+                Some(req.text.as_bytes()),
+            )?;
+            let paths: Vec<_> = stat.split(|b| *b == 0).filter(|v| !v.is_empty()).collect();
+            if paths.len() != 1
+                || paths[0].splitn(3, |b| *b == b'\t').nth(2) != Some(req.path.as_bytes())
+            {
+                return Err("Patch does not match the reviewed file.".into());
+            }
+            let mut args = vec!["apply", "--cached", "--recount", "--whitespace=nowarn"];
+            if req.mode == "staged" {
+                args.push("--reverse");
+            }
+            args.push("--check");
+            bytes(&repo, &args, Some(req.text.as_bytes()))?;
+            args.pop();
+            bytes(&repo, &args, Some(req.text.as_bytes()))?;
+            json!("Selected changes staged")
+        }
+        "commit" | "amend" => {
+            if req.text.trim().is_empty() {
+                return Err("Write a commit message first.".into());
+            }
+            let mut args = vec!["commit", "-F", "-"];
+            if req.action == "amend" {
+                args.push("--amend");
+            }
+            let out = bytes(&repo, &args, Some(req.text.as_bytes()))?;
+            json!(String::from_utf8_lossy(&out))
+        }
+        "fetch" => json!(git(&repo, &["fetch", "--all", "--prune"])?),
+        "pull" => json!(git(&repo, &["pull", "--ff-only"])?),
+        "push" => json!(git(&repo, &["push"])?),
+        "switch" => {
+            branch(&repo, &req.target)?;
+            json!(git(&repo, &["switch", &req.target])?)
+        }
+        "branch-create" => {
+            branch(&repo, &req.text)?;
+            let target = oid(
+                &repo,
+                if req.target.is_empty() {
+                    "HEAD"
+                } else {
+                    &req.target
+                },
+            )?;
+            json!(git(&repo, &["branch", &req.text, &target])?)
+        }
+        "branch-delete" => {
+            branch(&repo, &req.target)?;
+            json!(git(&repo, &["branch", "-d", &req.target])?)
+        }
+        "tag-create" => {
+            branch(&repo, &req.text)?;
+            let target = oid(&repo, &req.target)?;
+            json!(git(&repo, &["tag", &req.text, &target])?)
+        }
+        "tag-delete" => {
+            branch(&repo, &req.target)?;
+            json!(git(&repo, &["tag", "-d", &req.target])?)
+        }
+        "merge" => {
+            let target = oid(&repo, &req.target)?;
+            json!(git(&repo, &["merge", "--no-edit", &target])?)
+        }
+        "cherry-pick" | "revert" => {
+            let target = oid(&repo, &req.target)?;
+            json!(git(&repo, &[&req.action, "--no-edit", &target])?)
+        }
+        "reset" => {
+            if !["soft", "mixed", "hard"].contains(&req.mode.as_str()) {
+                return Err("Invalid reset mode.".into());
+            }
+            let target = oid(&repo, &req.target)?;
+            json!(git(&repo, &["reset", &format!("--{}", req.mode), &target])?)
+        }
+        "stash-save" => json!(git(
+            &repo,
+            &[
+                "stash",
+                "push",
+                "--include-untracked",
+                "-m",
+                if req.text.is_empty() {
+                    "GitGoblin stash"
+                } else {
+                    &req.text
+                }
+            ]
+        )?),
+        "stash-apply" | "stash-drop" => {
+            if !req.target.starts_with("stash@{")
+                || !req.target.ends_with('}')
+                || req.target[7..req.target.len() - 1].parse::<u32>().is_err()
+            {
+                return Err("Choose a stash.".into());
+            }
+            json!(git(
+                &repo,
+                &[
+                    "stash",
+                    if req.action == "stash-apply" {
+                        "apply"
+                    } else {
+                        "drop"
+                    },
+                    &req.target
+                ]
+            )?)
+        }
+        "reflog" => json!(git(
+            &repo,
+            &["reflog", "-100", "--date=iso", "--format=%H%x09%gd%x09%gs"]
+        )?),
+        "blame" => {
+            relative(&req.path)?;
+            json!(git(&repo, &["blame", "--date=short", "--", &req.path])?)
+        }
+        "remote-add" => {
+            branch(&repo, &req.target)?;
+            if req.text.starts_with('-') || req.text.is_empty() || req.text.contains('\0') {
+                return Err("Enter a remote URL.".into());
+            }
+            json!(git(&repo, &["remote", "add", &req.target, &req.text])?)
+        }
+        "remote-remove" => {
+            branch(&repo, &req.target)?;
+            json!(git(&repo, &["remote", "remove", &req.target])?)
+        }
+        "conflict" => {
+            relative(&req.path)?;
+            let read_stage = |stage: u8| {
+                git(&repo, &["show", &format!(":{stage}:{}", req.path)]).unwrap_or_default()
+            };
+            let content = match file_content(&repo, &req.path)? {
+                Some(bytes) => String::from_utf8(bytes).map_err(|_| {
+                    "Binary conflicts require choosing a version in an external editor."
+                })?,
+                None => String::new(),
+            };
+            json!({"base":read_stage(1),"ours":read_stage(2),"theirs":read_stage(3),"result":content,"fingerprint":fingerprint(&repo,&req.path)?})
+        }
+        "resolve" => {
+            check_fingerprint(&repo, &req)?;
+            relative(&req.path)?;
+            let candidate = repo.join(&req.path);
+            let parent = fs::canonicalize(candidate.parent().ok_or("Invalid conflict path")?)
+                .map_err(|e| e.to_string())?;
+            if !parent.starts_with(&repo) {
+                return Err("Conflict path resolves outside this worktree.".into());
+            }
+            let path = if candidate.exists() {
+                file_path(&repo, &req.path)?
+            } else {
+                candidate
+            };
+            fs::write(path, req.text.as_bytes()).map_err(|e| e.to_string())?;
+            git(&repo, &["add", "--", &req.path])?;
+            json!("Conflict resolved and staged")
+        }
+        "continue" | "abort" => {
+            if !["merge", "rebase", "cherry-pick", "revert"].contains(&req.mode.as_str()) {
+                return Err("No supported operation in progress.".into());
+            }
+            let mut cmd = command(&repo);
+            cmd.env("GIT_EDITOR", "true").args([
+                &req.mode,
+                if req.action == "continue" {
+                    "--continue"
+                } else {
+                    "--abort"
+                },
+            ]);
+            let out = cmd.output().map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+            }
+            json!(String::from_utf8_lossy(&out.stdout))
+        }
+        "rebase-plan" => {
+            let base = oid(&repo, &req.target)?;
+            if !git(&repo, &["rev-list", "--merges", &format!("{base}..HEAD")])?
+                .trim()
+                .is_empty()
+            {
+                return Err("This range contains merge commits. Choose a linear range for interactive rebase.".into());
+            }
+            json!(records(&git(
+                &repo,
+                &[
+                    "log",
+                    "--reverse",
+                    "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%D%x1f%s%x00",
+                    &format!("{base}..HEAD")
+                ]
+            )?))
+        }
+        "rebase" => {
+            let base = oid(&repo, &req.target)?;
+            if !git(&repo, &["rev-list", "--merges", &format!("{base}..HEAD")])?
+                .trim()
+                .is_empty()
+            {
+                return Err("This range contains merge commits. Choose a linear range for interactive rebase.".into());
+            }
+            if !status(&repo)?.is_empty() {
+                return Err("Commit or stash changes before rebasing.".into());
+            }
+            let allowed = git(&repo, &["rev-list", &format!("{base}..HEAD")])?;
+            let mut seen = std::collections::HashSet::new();
+            let mut todo = String::new();
+            let mut has_kept_commit = false;
+            for line in req.text.lines() {
+                let parts: Vec<_> = line.splitn(3, ' ').collect();
+                if parts.len() < 2
+                    || !["pick", "squash", "fixup", "drop", "edit"].contains(&parts[0])
+                    || !allowed.lines().any(|id| id == parts[1])
+                    || !seen.insert(parts[1])
+                {
+                    return Err("Invalid rebase plan. Reload the commits.".into());
+                }
+                if ["squash", "fixup"].contains(&parts[0]) && !has_kept_commit {
+                    return Err("Squash and fixup need an earlier kept commit.".into());
+                }
+                if parts[0] != "drop" {
+                    has_kept_commit = true;
+                }
+                todo.push_str(&format!("{} {}\n", parts[0], parts[1]));
+            }
+            if seen.len() != allowed.lines().count() {
+                return Err("Every commit must appear exactly once in the plan.".into());
+            }
+            let dir = git(&repo, &["rev-parse", "--absolute-git-dir"])?;
+            let todo_path = Path::new(dir.trim()).join("gitgoblin-rebase-todo");
+            fs::write(&todo_path, todo).map_err(|e| e.to_string())?;
+            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+            let quote = |p: &Path| {
+                format!(
+                    "'{}'",
+                    p.to_string_lossy()
+                        .replace('\\', "/")
+                        .replace('\'', "'\\''")
+                )
+            };
+            let mut cmd = command(&repo);
+            cmd.env(
+                "GIT_SEQUENCE_EDITOR",
+                format!(
+                    "{} --sequence-editor {}",
+                    quote(&executable),
+                    quote(&todo_path)
+                ),
+            )
+            .env("GIT_EDITOR", "true")
+            .args(["rebase", "-i", &base]);
+            let out = cmd.output().map_err(|e| e.to_string())?;
+            let _ = fs::remove_file(todo_path);
+            if !out.status.success() {
+                return Err(format!(
+                    "{}\nResolve conflicts or amend the paused commit, then continue or abort.",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+            json!(String::from_utf8_lossy(&out.stdout))
+        }
+        "worktree-add" => {
+            branch(&repo, &req.text)?;
+            let target = oid(&repo, &req.target)?;
+            if !Path::new(&req.path).is_absolute() || Path::new(&req.path).exists() {
+                return Err("Choose a new, unused absolute worktree folder.".into());
+            }
+            json!(git(
+                &repo,
+                &["worktree", "add", "-b", &req.text, "--", &req.path, &target]
+            )?)
+        }
+        _ => return Err("Unknown Git action.".into()),
+    };
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init"]).unwrap();
+        git(dir.path(), &["config", "user.name", "GitGoblin Test"]).unwrap();
+        git(
+            dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        )
+        .unwrap();
+        git(dir.path(), &["config", "commit.gpgsign", "false"]).unwrap();
+        git(dir.path(), &["config", "core.autocrlf", "false"]).unwrap();
+        git(
+            dir.path(),
+            &["config", "core.hooksPath", ".git/no-test-hooks"],
+        )
+        .unwrap();
+        dir
+    }
+    fn request(dir: &Path, action: &str) -> Request {
+        Request {
+            repo: dir.to_string_lossy().into(),
+            action: action.into(),
+            path: String::new(),
+            target: String::new(),
+            text: String::new(),
+            mode: String::new(),
+            fingerprint: String::new(),
+        }
+    }
+    #[test]
+    fn status_preserves_unusual_names_and_stale_stage_fails() {
+        let dir = fixture();
+        let path = "a file [1].txt";
+        fs::write(dir.path().join(path), "one\n").unwrap();
+        let files = status(dir.path()).unwrap();
+        assert_eq!(files[0].path, path);
+        let mut req = request(dir.path(), "stage");
+        req.path = path.into();
+        req.fingerprint = fingerprint(dir.path(), path).unwrap();
+        fs::write(dir.path().join(path), "two\n").unwrap();
+        assert!(execute(req).unwrap_err().contains("changed"));
+        assert!(git(dir.path(), &["diff", "--cached"]).unwrap().is_empty());
+    }
+    #[test]
+    fn stage_commit_unstage_and_history() {
+        let dir = fixture();
+        fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+        let mut req = request(dir.path(), "stage");
+        req.path = "file.txt".into();
+        req.fingerprint = fingerprint(dir.path(), "file.txt").unwrap();
+        execute(req).unwrap();
+        let mut req = request(dir.path(), "commit");
+        req.text = "First commit".into();
+        execute(req).unwrap();
+        assert_eq!(
+            execute(request(dir.path(), "history"))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        fs::write(dir.path().join("file.txt"), "two\n").unwrap();
+        let mut req = request(dir.path(), "stage");
+        req.path = "file.txt".into();
+        req.fingerprint = fingerprint(dir.path(), "file.txt").unwrap();
+        execute(req).unwrap();
+        let mut req = request(dir.path(), "unstage");
+        req.path = "file.txt".into();
+        req.fingerprint = fingerprint(dir.path(), "file.txt").unwrap();
+        execute(req).unwrap();
+        assert!(git(dir.path(), &["diff", "--cached"]).unwrap().is_empty());
+    }
+    #[test]
+    fn rejects_paths_and_option_injection() {
+        assert!(relative("../outside").is_err());
+        assert!(relative("C:\\outside").is_err());
+        let dir = fixture();
+        assert!(oid(dir.path(), "--help").is_err());
+        assert!(branch(dir.path(), "--help").is_err());
+    }
+    #[test]
+    fn binary_staging_and_deleted_file_staging() {
+        let dir = fixture();
+        let path = "binary.dat";
+        fs::write(dir.path().join(path), [0, 1, 2, 255]).unwrap();
+        let mut req = request(dir.path(), "stage");
+        req.path = path.into();
+        req.fingerprint = fingerprint(dir.path(), path).unwrap();
+        execute(req).unwrap();
+        assert_eq!(
+            bytes(dir.path(), &["show", ":binary.dat"], None).unwrap(),
+            vec![0, 1, 2, 255]
+        );
+        git(dir.path(), &["commit", "-m", "binary"]).unwrap();
+        fs::remove_file(dir.path().join(path)).unwrap();
+        let mut req = request(dir.path(), "stage");
+        req.path = path.into();
+        req.fingerprint = fingerprint(dir.path(), path).unwrap();
+        execute(req).unwrap();
+        assert!(git(dir.path(), &["ls-files"]).unwrap().is_empty());
+    }
+    #[test]
+    fn patch_cannot_write_another_file() {
+        let dir = fixture();
+        fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "one\n").unwrap();
+        git(dir.path(), &["add", "."]).unwrap();
+        git(dir.path(), &["commit", "-m", "base"]).unwrap();
+        fs::write(dir.path().join("b.txt"), "two\n").unwrap();
+        let patch = git(dir.path(), &["diff", "--", "b.txt"]).unwrap();
+        let mut req = request(dir.path(), "patch");
+        req.path = "a.txt".into();
+        req.fingerprint = fingerprint(dir.path(), "a.txt").unwrap();
+        req.text = patch;
+        assert!(execute(req).unwrap_err().contains("reviewed file"));
+        assert!(git(dir.path(), &["diff", "--cached"]).unwrap().is_empty());
+    }
+}
