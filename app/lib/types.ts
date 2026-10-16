@@ -16,6 +16,7 @@ export interface GitRef {
 }
 export interface Snapshot {
   root: string;
+  repositoryRoot?: string;
   branch: string;
   head: string;
   files: FileStatus[];

@@ -256,6 +256,20 @@ pub fn is_read_only(action: &str) -> bool {
         | "commit-message" | "reflog" | "blame" | "conflict" | "rebase-plan")
 }
 
+fn worktrees(repo: &Path) -> Result<Vec<Value>, String> {
+    Ok(git(repo, &["worktree", "list", "--porcelain", "-z"])?
+        .split("\0\0").filter_map(|block| {
+            let path = block.split('\0').find_map(|line| line.strip_prefix("worktree "))?;
+            let branch = block.split('\0').find_map(|line| line.strip_prefix("branch refs/heads/")).unwrap_or("Detached HEAD");
+            Some(json!({"path":path,"branch":branch}))
+        }).collect())
+}
+
+pub fn main_repository(path: &str) -> Result<String, String> {
+    worktrees(Path::new(path))?.first().and_then(|tree| tree["path"].as_str()).map(str::to_string)
+        .ok_or_else(|| "No main worktree found.".into())
+}
+
 pub fn execute(req: Request) -> Result<Value, String> {
     let repo = root(&req.repo)?;
     let value = match req.action.as_str() {
@@ -283,18 +297,8 @@ pub fn execute(req: Request) -> Result<Value, String> {
                 .collect();
             let branch = git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
                 .unwrap_or_else(|_| "Detached HEAD".into());
-            let worktrees = git(&repo, &["worktree", "list", "--porcelain"])?;
-            let worktrees: Vec<_> = worktrees
-                .split("\n\n")
-                .filter_map(|block| {
-                    let path = block.lines().find_map(|l| l.strip_prefix("worktree "))?;
-                    let branch = block
-                        .lines()
-                        .find_map(|l| l.strip_prefix("branch refs/heads/"))
-                        .unwrap_or("Detached HEAD");
-                    Some(json!({"path":path,"branch":branch}))
-                })
-                .collect();
+            let worktrees = worktrees(&repo)?;
+            let repository_root = worktrees.first().and_then(|tree| tree["path"].as_str()).unwrap_or(&req.repo);
             let gitdir = git(&repo, &["rev-parse", "--absolute-git-dir"])?;
             let gitdir = Path::new(gitdir.trim());
             let operation =
@@ -311,7 +315,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
                 };
             let stashes = git(&repo, &["stash", "list", "--format=%gd%x09%s"])?;
             let remotes = git(&repo, &["remote", "-v"])?;
-            json!({"root":repo.to_string_lossy().trim_start_matches("\\\\?\\"),"branch":branch.trim(),"files":files,"refs":refs,"worktrees":worktrees,"operation":operation,"stashes":stashes,"remotes":remotes,"head":git(&repo,&["rev-parse","--verify","HEAD"]).unwrap_or_default().trim()})
+            json!({"root":repo.to_string_lossy().trim_start_matches("\\\\?\\"),"repositoryRoot":repository_root,"branch":branch.trim(),"files":files,"refs":refs,"worktrees":worktrees,"operation":operation,"stashes":stashes,"remotes":remotes,"head":git(&repo,&["rev-parse","--verify","HEAD"]).unwrap_or_default().trim()})
         }
         "history" => history(&repo, &req.path, &req.text, req.offset, req.limit)?,
         "diff" => {
@@ -736,6 +740,18 @@ pub fn execute(req: Request) -> Result<Value, String> {
             }
             json!(String::from_utf8_lossy(&out.stdout))
         }
+        "worktree-remove" => {
+            if !Path::new(&req.path).is_absolute() { return Err("Choose an absolute worktree path.".into()); }
+            let target = fs::canonicalize(&req.path).map_err(|e| e.to_string())?;
+            let trees = worktrees(&repo)?;
+            let position = trees.iter().position(|tree| tree["path"].as_str()
+                .and_then(|path| fs::canonicalize(path).ok()).as_ref() == Some(&target))
+                .ok_or("This folder is not a registered worktree of this repository.")?;
+            if position == 0 { return Err("The main worktree cannot be removed.".into()); }
+            if target == repo { return Err("Switch to another worktree before removing the open worktree.".into()); }
+            // Git refuses dirty or locked worktrees; never force or delete folders ourselves.
+            json!(git(&repo, &["worktree", "remove", "--", &target.to_string_lossy()])?)
+        }
         "worktree-add" => {
             branch(&repo, &req.text)?;
             let target = oid(&repo, &req.target)?;
@@ -787,6 +803,47 @@ mod tests {
             limit: None,
         }
     }
+    #[test]
+    fn removes_only_clean_registered_linked_worktrees_and_groups_recent_repositories() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let linked = parent.path().join("linked tree");
+        let path = linked.to_string_lossy().to_string();
+        git(repo, &["worktree", "add", "-b", "linked", &path]).unwrap();
+        let snapshot = execute(request(&linked, "snapshot")).unwrap();
+        assert_eq!(fs::canonicalize(snapshot["repositoryRoot"].as_str().unwrap()).unwrap(), fs::canonicalize(repo).unwrap());
+        let history = tempfile::tempdir().unwrap();
+        let saved = vec![path.clone(), repo.to_string_lossy().to_string()];
+        // Simulate an existing history file written before worktree grouping.
+        fs::write(history.path().join("repositories.json"), serde_json::to_vec(&saved).unwrap()).unwrap();
+        let roots = crate::preferences::load_repositories(history.path()).unwrap().unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(fs::canonicalize(&roots[0]).unwrap(), fs::canonicalize(repo).unwrap());
+        crate::preferences::save_repositories(history.path(), &saved).unwrap();
+        assert_eq!(crate::preferences::load_repositories(history.path()).unwrap().unwrap(), roots);
+        let remove = |from: &Path, target: &str| {
+            let mut req = request(from, "worktree-remove");
+            req.path = target.into();
+            execute(req)
+        };
+        assert!(remove(repo, &repo.to_string_lossy()).unwrap_err().contains("main worktree"));
+        assert!(remove(&linked, &path).unwrap_err().contains("open worktree"));
+        assert!(remove(repo, &history.path().to_string_lossy()).unwrap_err().contains("not a registered"));
+        fs::write(linked.join("untracked.txt"), "keep me").unwrap();
+        assert!(remove(repo, &path).is_err());
+        assert_eq!(fs::read_to_string(linked.join("untracked.txt")).unwrap(), "keep me");
+        fs::remove_file(linked.join("untracked.txt")).unwrap();
+        git(repo, &["worktree", "lock", &path]).unwrap();
+        assert!(remove(repo, &path).is_err());
+        git(repo, &["worktree", "unlock", &path]).unwrap();
+        remove(repo, &path).unwrap();
+        assert!(!linked.exists());
+        assert_eq!(worktrees(repo).unwrap().len(), 1);
+        assert!(oid(repo, "linked").is_ok());
+    }
+
     #[test]
     fn snapshot_reports_divergence_and_missing_upstreams() {
         let dir = fixture();

@@ -2,7 +2,10 @@ use std::{fs, io::Write, path::Path};
 
 pub fn load_repositories(directory: &Path) -> Result<Option<Vec<String>>, String> {
     match fs::read(directory.join("repositories.json")) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|e| e.to_string()),
+        Ok(bytes) => {
+            let saved: Vec<String> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            Ok(Some(repository_roots(&saved)))
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
@@ -11,11 +14,20 @@ pub fn load_repositories(directory: &Path) -> Result<Option<Vec<String>>, String
 pub fn save_repositories(directory: &Path, repositories: &[String]) -> Result<(), String> {
     fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let mut file = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec(repositories).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec(&repository_roots(repositories)).map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     file.as_file().sync_all().map_err(|e| e.to_string())?;
     file.persist(directory.join("repositories.json")).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn repository_roots(repositories: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    repositories.iter().map(|path| crate::git::main_repository(path).unwrap_or_else(|_| path.clone()))
+        .filter(|path| {
+            let key = path.replace('\\', "/").trim_end_matches('/').to_string();
+            seen.insert(if cfg!(windows) { key.to_lowercase() } else { key })
+        }).take(12).collect()
 }
 
 fn credential() -> Result<keyring::Entry, String> {

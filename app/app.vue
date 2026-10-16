@@ -96,9 +96,14 @@ function branchMenu(event: MouseEvent | KeyboardEvent, branch: GitRef) {
   sidebarMenu.value?.open(event, items);
 }
 function worktreeMenu(event: MouseEvent | KeyboardEvent, path: string) {
+  const main = normalized(path) === normalized(snapshot.value?.repositoryRoot || snapshot.value?.worktrees[0]?.path || '');
+  const current = normalized(path) === normalized(repo.value);
+  const active = threads.value.some(thread => thread.activeRunId && normalized(thread.worktreePath || projects.value.find(project => project.id === thread.projectId)?.workspaceRoot || '') === normalized(path));
   sidebarMenu.value?.open(event, [
     { label: 'Open worktree', disabled: busy.value || example.value, run: () => w.openRepo(path) },
-    actionItem('New worktree…', 'worktree-add'), copyItem('Copy worktree path', path),
+    actionItem('New worktree…', 'worktree-add'),
+    actionItem(main ? 'Remove worktree (main worktree)' : current ? 'Remove worktree (currently open)' : active ? 'Remove worktree (agent running)' : 'Remove worktree…', 'worktree-remove', { path }, main || current || active),
+    copyItem('Copy worktree path', path),
   ]);
 }
 function conversationMenu(event: MouseEvent | KeyboardEvent, thread: T3Thread) {
@@ -317,6 +322,11 @@ const definitions: Record<
     ],
     defaults: { target: "HEAD" },
   },
+  "worktree-remove": {
+    title: "Remove worktree",
+    description: "Remove this worktree folder and its Git registration. The branch and its commits are kept. Git refuses dirty or locked worktrees. Ignored files inside the folder will also be deleted.",
+    fields: [{ key: "path", label: "Worktree folder to remove" }],
+  },
   rebase: {
     title: "Interactive rebase",
     description:
@@ -375,6 +385,9 @@ async function executeDialog() {
   if (!dialog.value) return;
   dialogError.value = "";
   try {
+    if (dialog.value === 'worktree-remove' && threads.value.some(thread => thread.activeRunId && normalized(thread.worktreePath || projects.value.find(project => project.id === thread.projectId)?.workspaceRoot || '') === normalized(values.value.path || ''))) {
+      throw new Error('Stop the agent using this worktree before removing it.');
+    }
     if (dialog.value === "rebase" && !rebaseCommits.value.length) {
       rebaseCommits.value = (
         await w.read<Commit[]>("rebase-plan", { target: values.value.target })
@@ -621,8 +634,8 @@ watch(amend, async (value) => {
       </div>
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
         <div class="repository-menu-heading">Recent repositories</div>
-        <button v-for="path in recent" :key="path" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(repo) ? 'true' : undefined" @click="chooseRepository(path)">
-          <FolderGit2 :size="16" /><span><strong>{{ path.replaceAll('\\', '/').split('/').at(-1) }}</strong><small>{{ path }}</small></span><Check v-if="normalized(path) === normalized(repo)" :size="14" />
+        <button v-for="path in recent" :key="path" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'true' : undefined" @click="chooseRepository(path)">
+          <FolderGit2 :size="16" /><span><strong>{{ path.replaceAll('\\', '/').split('/').at(-1) }}</strong><small>{{ path }}</small></span><Check v-if="normalized(path) === normalized(snapshot?.repositoryRoot || repo)" :size="14" />
         </button>
         <p v-if="!recent.length" class="nav-hint">Opened repositories will appear here.</p>
         <button class="repository-menu-open" :disabled="busy" @click="chooseRepository()"><Plus :size="16" />Open repository...<kbd>Ctrl O</kbd></button>

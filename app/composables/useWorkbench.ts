@@ -230,12 +230,16 @@ export function useWorkbench() {
     const loaded = snapshot.value as Snapshot | undefined;
     if (loaded) {
       repo.value = loaded.root;
+      const repositoryRoot = loaded.repositoryRoot || loaded.worktrees[0]?.path || loaded.root;
+      const normalize = (path: string) => path.replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
+      const worktreePaths = new Set(loaded.worktrees.map(tree => normalize(tree.path)));
       recent.value = [
-        repo.value,
-        ...recent.value.filter((p) => p !== repo.value),
+        repositoryRoot,
+        ...recent.value.filter((p) => normalize(p) !== normalize(repositoryRoot) && !worktreePaths.has(normalize(p))),
       ].slice(0, 12);
       try {
         await invoke("repositories_save", { repositories: recent.value });
+        recent.value = await invoke<string[]>("repositories_load");
       } catch (e) {
         error.value = `Repository opened, but history could not be saved: ${e}`;
       }
