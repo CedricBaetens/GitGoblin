@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch, nextTick } from "vue";
 import {
   Bot,
   ArrowUp,
@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   ChevronRight,
 } from "lucide-vue-next";
+import { visibleThreads } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop } from "~/lib/native";
 import type { T3Thread, T3Project, T3Projection } from "~/lib/types";
@@ -19,11 +20,13 @@ const props = defineProps<{
   context: string;
   example: boolean;
   repo: string;
+  visible: boolean;
 }>();
 const emit = defineEmits<{
   clearContext: [];
   selectWorktree: [path: string, threadId: string];
   threads: [threads: T3Thread[], projects: T3Project[], connected: boolean];
+  selection: [threadId: string];
 }>();
 const client = new T3Client(() => invoke<string>("t3_ticket"));
 const state = ref("disconnected"),
@@ -55,14 +58,30 @@ const modelOptions = computed(() => {
   }));
 });
 const drafts = new Map<string, string>();
+const composer = ref<HTMLTextAreaElement>();
+const conversationBody = ref<HTMLElement>();
+let followMessages = true;
+async function scrollToLatest() {
+  await nextTick();
+  if (props.visible && followMessages && conversationBody.value)
+    conversationBody.value.scrollTop = conversationBody.value.scrollHeight;
+}
+function trackConversationScroll() {
+  const el = conversationBody.value;
+  if (el) followMessages = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+}
+watch(() => props.visible, (visible) => { if (visible) { followMessages = true; void scrollToLatest(); } });
+const conversations = computed(() => visibleThreads(threads.value));
 const thread = computed(() =>
   threads.value.find((t) => t.id === selectedId.value),
 );
+watch(selectedId, (id) => emit('selection', id));
 const messages = computed(() =>
   [...(projection.value?.messages || [])].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   ),
 );
+watch(messages, () => void scrollToLatest(), { flush: 'post', deep: true });
 const requests = computed(
   () =>
     projection.value?.runtimeRequests.filter((r) => r.status === "pending") ||
@@ -90,10 +109,12 @@ client.onChange = () => {
   emit("threads", threads.value, projects.value, connected.value);
 };
 function select(id: string) {
+  followMessages = true;
   if (selectedId.value) drafts.set(selectedId.value, prompt.value);
   prompt.value = drafts.get(id) || "";
   selectedId.value = id;
   client.selectThread(id);
+  void scrollToLatest();
   const t = threads.value.find((t) => t.id === id);
   const path =
     t?.worktreePath ||
@@ -113,12 +134,16 @@ async function pair() {
   }
 }
 async function disconnect() {
-  client.disconnect();
-  await invoke("t3_disconnect");
-  projection.value = undefined;
-  threads.value = [];
-  projects.value = [];
-  emit("threads", [], [], false);
+  try {
+    await invoke("t3_disconnect");
+    client.disconnect();
+    projection.value = undefined;
+    threads.value = [];
+    projects.value = [];
+    emit("threads", [], [], false);
+  } catch (e) {
+    error.value = String(e);
+  }
 }
 async function send() {
   if (!thread.value || !prompt.value.trim() || sending.value) return;
@@ -131,7 +156,7 @@ async function send() {
       submittedThread,
       submittedText +
         (props.context
-          ? `\n\nSelected Git context (for review):\n\n${props.context}`
+          ? `\n\nSelected Git context:\n\n${props.context}`
           : ""),
     );
     drafts.delete(submittedThread.id);
@@ -193,13 +218,33 @@ function approvalContext(id: string) {
 }
 onMounted(async () => {
   if (desktop()) {
-    const found = await invoke<string | null>("t3_discover");
-    if (found) origin.value = found;
+    try {
+      const saved = await invoke<string | null>("t3_restore");
+      if (saved) {
+        origin.value = saved;
+        await client.connect();
+      } else {
+        const found = await invoke<string | null>("t3_discover");
+        if (found) origin.value = found;
+      }
+    } catch (e) {
+      error.value = String(e);
+    }
+  }
+});
+watch(conversations, (available) => {
+  if (selectedId.value && !available.some((thread) => thread.id === selectedId.value)) {
+    drafts.set(selectedId.value, prompt.value);
+    selectedId.value = "";
+    prompt.value = "";
+    projection.value = undefined;
+    client.selectThread("");
   }
 });
 onUnmounted(() => client.disconnect());
 defineExpose({
   select,
+  focusComposer: () => composer.value?.focus(),
   stopAll: async () => {
     for (const t of matchingThreads.value.filter((t) => t.activeRunId))
       await client.stop(t);
@@ -209,7 +254,7 @@ defineExpose({
 <template>
   <aside class="chat-panel">
     <div class="panel-heading">
-      <span><MessageSquare :size="15" />Conversations</span>
+      <span class="active-conversation" :title="thread?.title || 'Conversations'"><MessageSquare :size="15" /><span>{{ thread?.title || 'Conversations' }}</span></span>
       <div class="button-row">
         <button
           class="icon-button"
@@ -244,7 +289,7 @@ defineExpose({
           >Build the agent workspace</strong
         ><span class="badge">Example</span>
       </div>
-      <div class="conversation-body">
+      <div ref="conversationBody" class="conversation-body" @scroll="trackConversationScroll">
         <div class="message user">
           <span class="message-role">YOU <small>10:42</small></span>
           <p>
@@ -274,24 +319,13 @@ defineExpose({
       </div>
     </template>
     <template v-else-if="connected">
-      <select
-        class="thread-picker"
-        aria-label="Conversation"
-        :value="selectedId"
-        @change="select(($event.target as HTMLSelectElement).value)"
-      >
-        <option value="" disabled>Select a conversation</option>
-        <option v-for="t in threads" :key="t.id" :value="t.id">
-          {{ t.title }} · {{ t.status }}
-        </option>
-      </select>
       <div v-if="matchingThreads.length > 1" class="shared-note">
         {{ matchingThreads.length }} chats share this worktree and its changes.
       </div>
-      <div class="conversation-body">
+      <div ref="conversationBody" class="conversation-body" @scroll="trackConversationScroll">
         <div v-if="!thread" class="panel-empty">
           <MessageSquare :size="26" />
-          <p>Select a conversation to review its work.</p>
+          <p>Select a conversation in the left sidebar to review its work.</p>
         </div>
         <div
           v-for="message in messages"
@@ -371,6 +405,7 @@ defineExpose({
         </button>
       </div>
       <textarea
+        ref="composer"
         v-model="prompt"
         :disabled="!connected || !thread || example"
         placeholder="Give an instruction…"

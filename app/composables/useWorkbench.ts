@@ -1,6 +1,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import { git, desktop } from "~/lib/native";
+import { git, desktop, invoke } from "~/lib/native";
+import { createDiffCache } from "~/lib/diff-cache";
+import { comparisonBase } from "~/lib/branches";
 import { demoSnapshot, demoCommits, demoDiff } from "~/lib/demo";
 import type {
   Snapshot,
@@ -15,6 +17,42 @@ export function useWorkbench() {
     recent = ref<string[]>([]),
     snapshot = ref<Snapshot>(),
     commits = ref<Commit[]>([]);
+  const historyLoading = ref(false), historyHasMore = ref(false);
+  const historyPageSize = 500;
+  let historyGeneration = 0, historyQuery = '';
+  async function loadHistory(reset = false) {
+    if (example.value || (!reset && (historyLoading.value || !historyHasMore.value))) return;
+    const request = ++historyGeneration;
+    const root = repo.value;
+    const query = reset ? search.value : historyQuery;
+    const offset = reset ? 0 : commits.value.length;
+    historyLoading.value = true;
+    try {
+      const page = await git<Commit[]>({ repo: root, action: 'history', text: query, offset, limit: historyPageSize + 1 });
+      if (request !== historyGeneration || root !== repo.value) return;
+      const items = page.slice(0, historyPageSize);
+      if (reset) {
+        // Keep older loaded pages when a refresh leaves the first page unchanged.
+        const unchanged = query === historyQuery && items.length === historyPageSize && items.every((item, i) => commits.value[i]?.id === item.id);
+        if (!unchanged) { commits.value = items; historyHasMore.value = page.length > historyPageSize; }
+        else commits.value = [...items, ...commits.value.slice(historyPageSize)];
+      } else {
+        const seen = new Set(commits.value.map((commit) => commit.id));
+        commits.value = [...commits.value, ...items.filter((commit) => !seen.has(commit.id))];
+        historyHasMore.value = page.length > historyPageSize;
+      }
+      historyQuery = query;
+    } catch (e) {
+      if (request === historyGeneration) error.value = String(e);
+    } finally {
+      if (request === historyGeneration) historyLoading.value = false;
+    }
+  }
+  const diffCache = createDiffCache();
+  const diffLoading = ref(false);
+  const wholeFile = ref(false);
+  let displayedDiffKey = "";
+  let warmupGeneration = 0;
   const selected = ref(""),
     diff = ref<Diff>({ text: "", fingerprint: "" }),
     mode = ref("working"),
@@ -62,29 +100,61 @@ export function useWorkbench() {
   async function read<T>(action: string, extra: Partial<GitRequest> = {}) {
     return git<T>({ repo: repo.value, action, ...extra });
   }
-  async function loadDiff() {
+  async function loadDiff(background = false) {
     const request = ++diffGeneration;
     const file = selected.value;
+    const key = JSON.stringify([repo.value, mode.value, base.value, file, wholeFile.value]);
+    const switchedFile = key !== displayedDiffKey;
+    if (switchedFile) {
+      diff.value = diffCache.get(key) || { text: "", fingerprint: "" };
+      displayedDiffKey = key;
+    }
     if (!file) {
+      diffLoading.value = false;
       diff.value = { text: "", fingerprint: "" };
       return;
     }
     if (example.value) {
+      diffLoading.value = false;
       diff.value = demoDiff;
       return;
     }
+    if (!background || switchedFile) diffLoading.value = true;
     try {
-      const next = await read<Diff>("diff", {
+      const next = await diffCache.load(key, () => read<Diff>("diff", {
         path: file,
         mode: mode.value,
         target: base.value,
-      });
-      if (request === diffGeneration) diff.value = next;
+        wholeFile: wholeFile.value,
+      }));
+      if (request === diffGeneration && (next.text !== diff.value.text || next.fingerprint !== diff.value.fingerprint)) diff.value = next;
     } catch (e) {
       if (request === diffGeneration) {
         diff.value = { text: "", fingerprint: "" };
         error.value = String(e);
       }
+    } finally {
+      if (request === diffGeneration) diffLoading.value = false;
+    }
+  }
+  async function warmDiffs() {
+    const request = ++warmupGeneration;
+    const root = repo.value;
+    const target = base.value;
+    const full = wholeFile.value;
+    const files = [
+      ...working.value.map((file) => ({ path: file.path, mode: "working" })),
+      ...staged.value.map((file) => ({ path: file.path, mode: "staged" })),
+    ].filter((file) => file.path !== selected.value || file.mode !== mode.value).slice(0, 8);
+    for (let i = 0; i < files.length; i += 2) {
+      if (request !== warmupGeneration || busy.value || root !== repo.value || full !== wholeFile.value) return;
+      await Promise.all(files.slice(i, i + 2).map(async (file) => {
+        const key = JSON.stringify([root, file.mode, target, file.path, full]);
+        if (diffCache.get(key)) return;
+        try {
+          await diffCache.load(key, () => git<Diff>({ repo: root, action: "diff", ...file, target, wholeFile: full }));
+        } catch { /* The selected-file load reports errors; prefetch is optional. */ }
+      }));
     }
   }
   async function refresh(full = false) {
@@ -95,8 +165,9 @@ export function useWorkbench() {
       const next = await read<Snapshot>("snapshot");
       if (request !== generation) return;
       const changed = next.head !== snapshot.value?.head;
-      snapshot.value = next;
-      if (mode.value === "branch") {
+      if (JSON.stringify(next) !== JSON.stringify(snapshot.value)) snapshot.value = next;
+      base.value = comparisonBase(next, base.value);
+      if (mode.value === "branch" && base.value) {
         const files = await read<string[]>("branch-files", {
           target: base.value,
         });
@@ -105,10 +176,11 @@ export function useWorkbench() {
       }
       if (!currentFiles.value.some((f) => f.path === selected.value))
         selected.value = currentFiles.value[0]?.path || "";
-      await loadDiff();
+      const loading = loadDiff(true);
+      void warmDiffs();
+      await loading;
       if (full || changed) {
-        const history = await read<Commit[]>("history", { text: search.value });
-        if (request === generation) commits.value = history;
+        await loadHistory(true);
       }
     } catch (e) {
       if (request === generation) error.value = String(e);
@@ -135,6 +207,14 @@ export function useWorkbench() {
       }));
     if (typeof result !== "string") return;
     generation++;
+    historyGeneration++;
+    historyLoading.value = false;
+    historyHasMore.value = false;
+    selectedCommit.value = undefined;
+    historyDiff.value = "";
+    diffGeneration++;
+    diffCache.clear();
+    warmupGeneration++;
     repo.value = result;
     example.value = false;
     snapshot.value = undefined;
@@ -154,17 +234,27 @@ export function useWorkbench() {
         repo.value,
         ...recent.value.filter((p) => p !== repo.value),
       ].slice(0, 12);
-      localStorage.setItem(
-        "gitgoblin.repositories",
-        JSON.stringify(recent.value),
-      );
+      try {
+        await invoke("repositories_save", { repositories: recent.value });
+      } catch (e) {
+        error.value = `Repository opened, but history could not be saved: ${e}`;
+      }
     }
   }
   function showExample() {
     generation++;
+    historyGeneration++;
+    historyLoading.value = false;
+    historyHasMore.value = false;
+    selectedCommit.value = undefined;
+    historyDiff.value = "";
+    diffGeneration++;
+    diffCache.clear();
+    warmupGeneration++;
     example.value = true;
     repo.value = demoSnapshot.root;
     snapshot.value = structuredClone(demoSnapshot);
+    base.value = comparisonBase(demoSnapshot, base.value);
     commits.value = demoCommits;
     mode.value = "working";
     selected.value = demoSnapshot.files[0]!.path;
@@ -172,7 +262,7 @@ export function useWorkbench() {
     view.value = "changes";
     error.value = "";
   }
-  async function mutate(action: string, extra: Partial<GitRequest> = {}) {
+  async function runMutation(operation: () => Promise<string>) {
     if (example.value)
       throw new Error(
         "This is an example workspace. Open a real repository in the desktop app to make changes.",
@@ -180,10 +270,13 @@ export function useWorkbench() {
     if (busy.value)
       throw new Error("Wait for the current Git operation to finish.");
     busy.value = true;
+    diffGeneration++;
+    diffCache.clear();
+    warmupGeneration++;
     error.value = "";
     notice.value = "";
     try {
-      const out = await read<string>(action, extra);
+      const out = await operation();
       notice.value = out?.trim() || "Done";
       return out;
     } catch (e) {
@@ -193,6 +286,27 @@ export function useWorkbench() {
       busy.value = false;
       await refresh(true);
     }
+  }
+  async function mutate(action: string, extra: Partial<GitRequest> = {}) {
+    return runMutation(() => read<string>(action, extra));
+  }
+  async function stageFiles(paths: string[], fileMode: string) {
+    if (!paths.length || !['working', 'staged'].includes(fileMode)) return;
+    const action = fileMode === 'staged' ? 'unstage' : 'stage';
+    return runMutation(async () => {
+      let completed = 0;
+      try {
+        for (const path of paths) {
+          notice.value = `${action === 'stage' ? 'Staging' : 'Unstaging'} ${completed + 1} of ${paths.length} files`;
+          const current = await read<Diff>('diff', { path, mode: fileMode });
+          await read<string>(action, { path, fingerprint: current.fingerprint });
+          completed++;
+        }
+      } catch (e) {
+        throw new Error(`${completed} of ${paths.length} files ${action === 'stage' ? 'staged' : 'unstaged'}. ${e}`);
+      }
+      return `${completed} files ${action === 'stage' ? 'staged' : 'unstaged'}`;
+    });
   }
   async function selectCommit(commit: Commit) {
     selectedCommit.value = commit;
@@ -215,15 +329,11 @@ export function useWorkbench() {
       );
       return;
     }
-    try {
-      commits.value = await read<Commit[]>("history", { text: search.value });
-    } catch (e) {
-      error.value = String(e);
-    }
+    await loadHistory(true);
   }
-  watch([selected, mode, base], () => void loadDiff());
-  watch(mode, async () => {
-    if (mode.value === "branch" && !example.value) {
+  watch([selected, mode, base, wholeFile], () => void loadDiff());
+  watch([mode, base], async () => {
+    if (mode.value === "branch" && !example.value && base.value) {
       try {
         branchFiles.value = await read<string[]>("branch-files", {
           target: base.value,
@@ -232,7 +342,8 @@ export function useWorkbench() {
         error.value = String(e);
       }
     }
-    selected.value = currentFiles.value[0]?.path || "";
+    if (!currentFiles.value.some((file) => file.path === selected.value))
+      selected.value = currentFiles.value[0]?.path || "";
   });
   watch(view, async () => {
     if (view.value === "reflog") {
@@ -248,18 +359,29 @@ export function useWorkbench() {
       }
     }
   });
-  onMounted(() => {
+  onMounted(async () => {
     try {
-      const stored = JSON.parse(
-        localStorage.getItem("gitgoblin.repositories") || "[]",
-      );
-      if (Array.isArray(stored))
-        recent.value = stored.filter((v) => typeof v === "string");
-    } catch {}
+      const saved = desktop()
+        ? await invoke<string[] | null>("repositories_load")
+        : null;
+      if (saved !== null) {
+        recent.value = saved;
+      } else {
+        const stored = JSON.parse(localStorage.getItem("gitgoblin.repositories") || "[]");
+        if (Array.isArray(stored))
+          recent.value = stored.filter((v) => typeof v === "string").slice(0, 12);
+        if (desktop() && recent.value.length)
+          await invoke("repositories_save", { repositories: recent.value });
+      }
+      if (desktop() && recent.value[0]) await openRepo(recent.value[0]);
+    } catch (e) {
+      error.value = `Could not restore repository history: ${e}`;
+    }
     timer = setInterval(() => void refresh(), 2500);
   });
   onUnmounted(() => {
     generation++;
+    warmupGeneration++;
     clearInterval(timer);
   });
   return {
@@ -267,8 +389,13 @@ export function useWorkbench() {
     recent,
     snapshot,
     commits,
+    historyLoading,
+    historyHasMore,
+    loadHistory,
     selected,
     diff,
+    diffLoading,
+    wholeFile,
     mode,
     base,
     view,
@@ -290,6 +417,7 @@ export function useWorkbench() {
     loadDiff,
     read,
     mutate,
+    stageFiles,
     selectCommit,
     searchHistory,
   };

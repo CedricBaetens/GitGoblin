@@ -42,6 +42,9 @@ export interface GitRequest {
   text?: string;
   mode?: string;
   fingerprint?: string;
+  wholeFile?: boolean;
+  offset?: number;
+  limit?: number;
 }
 export interface T3Project {
   id: string;
@@ -51,6 +54,14 @@ export interface T3Project {
   defaultModelSelection?: { instanceId: string; model: string } | null;
 }
 export interface T3Thread {
+  settledOverride?: "settled" | "active" | null;
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  createdAt?: string;
+  unsettledAt?: string | null;
+  pinnedAt?: string | null;
+  pinOrderKey?: string | null;
+  activeOrderKey?: string | null;
   id: string;
   projectId: string;
   title: string;

@@ -1,29 +1,72 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod git;
+mod preferences;
 use serde_json::{json, Value};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
-use tauri::State;
+use tauri::{Manager, State};
 
 #[derive(Default)]
 struct AppState {
-    git_lock: Arc<Mutex<()>>,
+    git_lock: Arc<RwLock<()>>,
     t3: Mutex<Option<(String, String)>>,
 }
 
 #[tauri::command]
 async fn git_request(request: git::Request, state: State<'_, AppState>) -> Result<Value, String> {
-    // A single app-owned mutation queue also prevents overlapping refreshes and index writes.
+    // Reads can run together; mutations still exclude every other Git operation.
     let lock = state.git_lock.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = lock.lock().map_err(|e| e.to_string())?;
-        git::execute(request)
+        let action = request.action.clone();
+        with_git_access(&lock, &action, || git::execute(request))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn with_git_access<T>(lock: &RwLock<()>, action: &str, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    if git::is_read_only(action) {
+        let _guard = lock.read().map_err(|e| e.to_string())?;
+        run()
+    } else {
+        let _guard = lock.write().map_err(|e| e.to_string())?;
+        run()
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    #[test]
+    fn diffs_do_not_queue_behind_reads_but_mutations_stay_exclusive() {
+        let lock = Arc::new(RwLock::new(()));
+        let background = lock.read().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let other = lock.clone();
+        let reader = std::thread::spawn(move || with_git_access(&other, "diff", || {
+            sender.send(()).unwrap(); Ok(())
+        }));
+        let concurrent = receiver.recv_timeout(Duration::from_secs(1));
+        drop(background);
+        reader.join().unwrap().unwrap();
+        assert!(concurrent.is_ok(), "File diff waited behind a background read");
+
+        let background = lock.read().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let other = lock.clone();
+        let writer = std::thread::spawn(move || with_git_access(&other, "stage", || {
+            sender.send(()).unwrap(); Ok(())
+        }));
+        let premature = receiver.recv_timeout(Duration::from_millis(50));
+        drop(background);
+        assert!(premature.is_err(), "Mutation overlapped a read");
+        receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        writer.join().unwrap().unwrap();
+        assert!(!git::is_read_only("unknown-action"));
+    }
 }
 
 fn local_origin(value: &str) -> Result<String, String> {
@@ -113,7 +156,9 @@ async fn t3_pair(
         .and_then(Value::as_str)
         .ok_or("T3 did not return an access token.")?
         .to_string();
-    *state.t3.lock().map_err(|e| e.to_string())? = Some((origin, token));
+    let mut session = state.t3.lock().map_err(|e| e.to_string())?;
+    preferences::save_pairing(&(origin.clone(), token.clone()))?;
+    *session = Some((origin, token));
     Ok(json!({"connected":true,"expiresIn":result.get("expires_in"),"scope":result.get("scope")}))
 }
 
@@ -156,10 +201,32 @@ async fn t3_ticket(state: State<'_, AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn t3_disconnect(state: State<'_, AppState>) {
-    if let Ok(mut session) = state.t3.lock() {
-        *session = None;
+fn t3_disconnect(state: State<'_, AppState>) -> Result<(), String> {
+    let mut session = state.t3.lock().map_err(|e| e.to_string())?;
+    preferences::forget_pairing()?;
+    *session = None;
+    Ok(())
+}
+
+#[tauri::command]
+fn t3_restore(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let mut session = state.t3.lock().map_err(|e| e.to_string())?;
+    if session.is_none() {
+        if let Some((origin, token)) = preferences::load_pairing()? {
+            *session = Some((local_origin(&origin)?, token));
+        }
     }
+    Ok(session.as_ref().map(|(origin, _)| origin.clone()))
+}
+
+#[tauri::command]
+fn repositories_load(app: tauri::AppHandle) -> Result<Option<Vec<String>>, String> {
+    preferences::load_repositories(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+fn repositories_save(app: tauri::AppHandle, repositories: Vec<String>) -> Result<(), String> {
+    preferences::save_repositories(&app.path().app_data_dir().map_err(|e| e.to_string())?, &repositories)
 }
 
 #[tauri::command]
@@ -231,6 +298,9 @@ fn main() {
             t3_pair,
             t3_ticket,
             t3_disconnect,
+            t3_restore,
+            repositories_load,
+            repositories_save,
             open_editor
         ])
         .run(tauri::generate_context!())

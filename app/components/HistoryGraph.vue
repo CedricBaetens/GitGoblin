@@ -2,7 +2,7 @@
 import type { GraphRow } from "~/lib/graph";
 defineProps<{ row: GraphRow }>();
 const colors = [
-  "#9babec",
+  "#d9ac60",
   "#83c8aa",
   "#d8ac83",
   "#c69bd3",
@@ -14,14 +14,14 @@ const x = (lane: number) => 10 + lane * 12;
 <template>
   <svg
     class="history-graph"
-    :width="Math.max(50, row.width * 12 + 10)"
-    height="45"
+    :width="Math.max(24, row.width * 12 + 10)"
+    height="22"
     aria-label="Commit ancestry"
   >
     <path
       v-for="edge in row.above"
       :key="`top-${edge.lane}`"
-      :d="`M ${x(edge.lane)} 0 L ${x(edge.lane)} 22`"
+      :d="`M ${x(edge.lane)} 0 L ${x(edge.lane)} 11`"
       :stroke="colors[edge.color % colors.length]"
       fill="none"
       stroke-width="1.5"
@@ -29,18 +29,18 @@ const x = (lane: number) => 10 + lane * 12;
     <path
       v-for="(edge, i) in row.edges"
       :key="i"
-      :d="`M ${x(edge.from)} 22 C ${x(edge.from)} 37 ${x(edge.to)} 32 ${x(edge.to)} 45`"
+      :d="`M ${x(edge.from)} 11 C ${x(edge.from)} 17 ${x(edge.to)} 17 ${x(edge.to)} 22`"
       :stroke="colors[edge.color % colors.length]"
       fill="none"
       stroke-width="1.5"
     />
     <circle
       :cx="x(row.lane)"
-      cy="22"
-      r="4"
-      fill="#171c28"
+      cy="11"
+      r="3"
+      :fill="colors[row.lane % colors.length]"
       :stroke="colors[row.lane % colors.length]"
-      stroke-width="2"
+      stroke-width="1"
     />
   </svg>
 </template>

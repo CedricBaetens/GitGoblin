@@ -16,7 +16,7 @@ The agreed release goal is a usable Fork replacement. An intermediate foundation
 - Rust command boundary for branches, tags, remotes, fetch/pull/push, stash, merge, cherry-pick, revert, reset, linear interactive rebase, and conflict editing/continue/abort.
 - File fingerprints for stale-review checks. Whole-file staging captures reviewed bytes before writing the index. Git arguments are passed without a shell; mutation requests are serialized.
 - T3 local pairing, ticketed WebSocket RPC, shell/thread subscriptions, conversation navigation, prompt/context sending, create/stop controls, approval response controls, per-chat drafts and review-position memory.
-- Reconnects refresh subscriptions without replaying mutations. Credentials stay in Rust memory; Git functionality does not require T3.
+- Reconnects refresh subscriptions without replaying mutations. Credentials remain behind the native boundary and persist in the OS credential store; Git functionality does not require T3.
 - Keyboard-accessible dialogs and an explicit, non-mutating example workspace for browser review.
 
 ## Verification as of 2026-10-16
@@ -34,6 +34,24 @@ The agreed release goal is a usable Fork replacement. An intermediate foundation
 1. Validate desktop launch and native UI workflows on Windows; automated native unit and smoke tests now pass.
 2. Exercise a real paired T3 session, including a message/response and approval visible in both apps.
 3. Verify native UI behavior, conflict workflows, repository refresh while agents edit, and large-history performance on real repositories.
-4. Review release limitations: history currently loads up to 150 matching commits; file history/blame are textual views; merge-containing interactive-rebase ranges are rejected; reword uses pause/amend/continue; pull is fast-forward-only; push requires configured tracking; no force-push UI; binary conflicts require an external editor; T3 credentials require pairing again after restart; structured agent questions are handled in T3.
+4. Review release limitations: history loads in 500-commit pages with virtualized rows; file history/blame are textual views; merge-containing interactive-rebase ranges are rejected; reword uses pause/amend/continue; pull is fast-forward-only; push requires configured tracking; no force-push UI; binary conflicts require an external editor; expired or revoked T3 credentials require pairing again; structured agent questions are handled in T3.
 
 This is an unverified desktop alpha, not yet a validated Fork replacement. The release goal remains unchanged.
+
+### Persistence verification
+
+Repository history now uses the stable per-user app data directory, migrates legacy browser history, and reopens the latest repository. T3 pairing restores from the OS credential store; explicit disconnect deletes it. Type checking, 16 frontend tests, and 7 native tests pass, including repository save/reload/replacement and credential lifecycle tests with a mock store. A live paired T3 restart and packaged/development round trip have not been exercised.
+
+
+### Compact workspace and diff responsiveness
+
+The integrated titlebar includes repository switching and native window controls. Change lists support compact tree/list layouts, file double-click staging, and folder staging. Diffs offer unified/side-by-side layouts and optional whole-file context; commit input is collapsed until editing. Cached/prefetched diffs and concurrent native reads reduce selection latency. Background refresh preserves unchanged state and hunk controls retain their geometry while loading.
+
+Validation: 31 frontend tests, 10 native tests, type checking, and production build pass. Browser checks covered repository selection, compact rows, folder path selection, side-by-side rendering, and identical hunk/header positions before/during/after loading. Native window behavior still needs a desktop restart and hands-on verification. First uncached diffs still depend on repository/file size.
+
+The installed T3 0.0.45 bundle uses the legacy turn protocol; the reference checkout uses the newer message protocol. GitGoblin now distinguishes their shell snapshots, sends the corresponding commands, accepts legacy message snapshots/stream updates, and displays string rejection reasons. Both protocol paths are covered with simulated sockets. No live message was sent during verification; live sending and approval workflows still need verification.
+
+
+### Compact paginated history
+
+History uses 22-pixel rows with continuous ancestry lines/dots, refs before the subject, and aligned author, hash, and timestamp columns. It starts with 500 commits and loads older pages near the scroll boundary or via the explicit button. Only viewport rows are mounted. Search resets pagination; unchanged refreshes retain older loaded pages. Validation: 35 frontend tests, 11 native tests, type checking, and production build pass. Browser checks exercised 1,000 commits, 22-pixel graph continuity, and both pagination triggers. Native pagination/filter tests use disposable Git history beyond 150 commits. Large real-repository desktop performance remains unmeasured.

@@ -32,17 +32,29 @@ function localOrigin(value: string) {
   return url.origin;
 }
 function protocolError(value: unknown): Error {
-  if (typeof value === "object" && value) {
-    if ("message" in value && typeof value.message === "string")
-      return new Error(value.message);
-    for (const entry of Object.values(value)) {
-      if (typeof entry === "object" && entry) {
-        const error = protocolError(entry);
-        if (error.message !== "T3 rejected this request.") return error;
-      }
+  const message = (value: unknown): string | undefined => {
+    if (typeof value === "string") return value || undefined;
+    if (!value || typeof value !== "object") return;
+    const item = value as Json;
+    if (typeof item.message === "string") return item.message;
+    for (const key of ["error", "defect", "cause", "reason"]) {
+      const found = message(item[key]);
+      if (found) return found;
     }
-  }
-  return new Error("T3 rejected this request.");
+    if (Array.isArray(value)) {
+      for (const entry of value) { const found = message(entry); if (found) return found; }
+    }
+  };
+  return new Error(message(value) || "T3 rejected this request without an error description.");
+}
+
+function normalizeThread(thread: Json): T3Thread {
+  if (!("latestTurn" in thread)) return thread as T3Thread;
+  return {
+    ...thread,
+    activeRunId: thread.session?.activeTurnId || (thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null),
+    status: thread.session?.status || thread.latestTurn?.state || "idle",
+  } as T3Thread;
 }
 
 // Narrow implementation of the Effect 4 JSON RPC envelope. Kept separate from UI
@@ -59,6 +71,7 @@ export class T3Client {
   private lastReceived = 0;
   private readyTimeout?: ReturnType<typeof setTimeout>;
   private threadId = "";
+  private legacyProtocol = false;
   private cancelThread?: () => void;
   projects: T3Project[] = [];
   threads: T3Thread[] = [];
@@ -202,20 +215,21 @@ export class T3Client {
               throw new Error("Unsupported T3 shell snapshot.");
             clearTimeout(this.readyTimeout);
             this.projects = item.snapshot.projects;
-            this.threads = item.snapshot.threads;
+            this.legacyProtocol = "snapshotSequence" in item.snapshot && !("schemaVersion" in item.snapshot);
+            this.threads = item.snapshot.threads.map(normalizeThread);
             this.status = "connected";
             this.failures = 0;
-          } else if (item.kind === "thread.updated") {
+          } else if ((item.kind === "thread.updated" || item.kind === "thread-upserted")) {
             this.threads = this.threads.filter((t) => t.id !== item.thread.id);
-            if (item.location !== "archive") this.threads.push(item.thread);
-          } else if (item.kind === "thread.removed")
+            if (item.location !== "archive") this.threads.push(normalizeThread(item.thread));
+          } else if ((item.kind === "thread.removed" || item.kind === "thread-removed"))
             this.threads = this.threads.filter((t) => t.id !== item.threadId);
-          else if (item.kind === "project.updated")
+          else if ((item.kind === "project.updated" || item.kind === "project-upserted"))
             this.projects = [
               ...this.projects.filter((p) => p.id !== item.project.id),
               item.project,
             ];
-          else if (item.kind === "project.removed")
+          else if ((item.kind === "project.removed" || item.kind === "project-removed"))
             this.projects = this.projects.filter(
               (p) => p.id !== item.projectId,
             );
@@ -280,7 +294,7 @@ export class T3Client {
     this.threadId = id;
     this.projection = undefined;
     this.onChange();
-    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    if (!id || this.socket?.readyState !== WebSocket.OPEN) return;
     const generation = this.generation;
     const stream = this.request(
       "orchestration.subscribeThread",
@@ -288,12 +302,25 @@ export class T3Client {
       (item) => {
         if (id !== this.threadId || generation !== this.generation) return;
         if (item.kind === "snapshot") {
-          this.projection = item.projection;
+          this.projection = item.projection || (item.snapshot?.thread ? {
+            thread: normalizeThread(item.snapshot.thread),
+            messages: item.snapshot.thread.messages || [],
+            runtimeRequests: [],
+            turnItems: [],
+          } : undefined);
           this.onChange();
         } else if (item.kind === "event") {
           const event = item.event;
           const p = this.projection;
           if (!p) return;
+          if (event.type === "thread.message-sent" && event.payload?.messageId) {
+            const incoming = { ...event.payload, id: event.payload.messageId };
+            const old = p.messages.find((message) => message.id === incoming.id);
+            if (old) Object.assign(old, incoming, {
+              text: incoming.streaming ? old.text + incoming.text : incoming.text || old.text,
+            });
+            else p.messages.push(incoming);
+          }
           const fields: Record<string, string> = {
             "message.created": "messages",
             "message.updated": "messages",
@@ -331,6 +358,16 @@ export class T3Client {
     return this.call("orchestration.dispatchCommand", command);
   }
   sendMessage(thread: T3Thread, text: string) {
+    if (this.legacyProtocol) return this.dispatch({
+      type: "thread.turn.start",
+      commandId: crypto.randomUUID(),
+      threadId: thread.id,
+      message: { messageId: crypto.randomUUID(), role: "user", text, attachments: [] },
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      createdAt: new Date().toISOString(),
+    });
     return this.dispatch({
       type: "message.dispatch",
       commandId: crypto.randomUUID(),
@@ -347,6 +384,10 @@ export class T3Client {
   }
   stop(thread: T3Thread) {
     if (!thread.activeRunId) return Promise.resolve();
+    if (this.legacyProtocol) return this.dispatch({
+      type: "thread.turn.interrupt", commandId: crypto.randomUUID(),
+      threadId: thread.id, turnId: thread.activeRunId, createdAt: new Date().toISOString(),
+    });
     return this.dispatch({
       type: "run.interrupt",
       commandId: crypto.randomUUID(),
@@ -356,6 +397,10 @@ export class T3Client {
     });
   }
   approve(threadId: string, requestId: string, decision: "accept" | "decline") {
+    if (this.legacyProtocol) return this.dispatch({
+      type: "thread.approval.respond", commandId: crypto.randomUUID(),
+      threadId, requestId, decision, createdAt: new Date().toISOString(),
+    });
     return this.dispatch({
       type: "runtime-request.respond",
       commandId: crypto.randomUUID(),
@@ -370,6 +415,14 @@ export class T3Client {
     modelSelection: T3Thread["modelSelection"],
     worktreePath?: string,
   ) {
+    if (this.legacyProtocol) {
+      const threadId = crypto.randomUUID();
+      return this.dispatch({
+        type: "thread.create", commandId: crypto.randomUUID(), threadId, projectId,
+        title, modelSelection, runtimeMode: "approval-required", interactionMode: "default",
+        branch: null, worktreePath: worktreePath || null, createdAt: new Date().toISOString(),
+      }).then(() => ({ threadId }));
+    }
     return this.call("orchestration.launchThread", {
       commandId: crypto.randomUUID(),
       creationSource: "web",

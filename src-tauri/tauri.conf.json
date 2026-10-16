@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "GitGoblin",
+        "decorations": false,
         "width": 1500,
         "height": 960,
         "minWidth": 1000,

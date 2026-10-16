@@ -23,6 +23,12 @@ pub struct Request {
     pub mode: String,
     #[serde(default)]
     pub fingerprint: String,
+    #[serde(default)]
+    pub whole_file: bool,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +52,7 @@ pub fn command(repo: &Path) -> Command {
             "color.ui=false",
         ])
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_LITERAL_PATHSPECS", "1");
     #[cfg(windows)]
     {
@@ -98,7 +105,7 @@ fn oid(repo: &Path, value: &str) -> Result<String, String> {
             "--end-of-options",
             &format!("{value}^{{commit}}"),
         ],
-    )?
+    ).map_err(|error| format!("Cannot resolve commit or branch '{value}'. Choose an existing reference.\n{error}"))?
     .trim()
     .into())
 }
@@ -213,16 +220,21 @@ fn records(text: &str) -> Vec<Value> {
         (values.len() >= 6).then(|| json!({"id":values[0], "parents":values[1], "author":values[2], "date":values[3], "refs":values[4], "subject":values[5]}))
     }).collect()
 }
-fn history(repo: &Path, path: &str, search: &str) -> Result<Value, String> {
+fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<usize>) -> Result<Value, String> {
+    let count = format!("--max-count={}", limit.unwrap_or(500).clamp(1, 2000));
+    let skip = format!("--skip={offset}");
     let mut args = vec![
         "log",
         "--topo-order",
-        "-150",
+        &count,
+        &skip,
         "--date=iso-strict",
         "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%D%x1f%s%x00",
     ];
     if path.is_empty() {
-        args.push("--all");
+        // Internal snapshots are recovery data, not normal branch history.
+        // Exclude ref roots rather than commits: shared branch ancestors must remain.
+        args.extend(["--exclude=refs/t3/*", "--all", "--decorate-refs-exclude=refs/t3/*"]);
     }
     if !search.is_empty() {
         args.extend(["--fixed-strings", "--regexp-ignore-case", "--grep", search]);
@@ -236,6 +248,11 @@ fn history(repo: &Path, path: &str, search: &str) -> Result<Value, String> {
         Err(_) if git(repo, &["rev-parse", "--verify", "HEAD"]).is_err() => Ok(json!([])),
         Err(e) => Err(e),
     }
+}
+
+pub fn is_read_only(action: &str) -> bool {
+    matches!(action, "snapshot" | "history" | "diff" | "branch-files" | "commit-diff"
+        | "commit-message" | "reflog" | "blame" | "conflict" | "rebase-plan")
 }
 
 pub fn execute(req: Request) -> Result<Value, String> {
@@ -293,7 +310,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
             let remotes = git(&repo, &["remote", "-v"])?;
             json!({"root":repo.to_string_lossy().trim_start_matches("\\\\?\\"),"branch":branch.trim(),"files":files,"refs":refs,"worktrees":worktrees,"operation":operation,"stashes":stashes,"remotes":remotes,"head":git(&repo,&["rev-parse","--verify","HEAD"]).unwrap_or_default().trim()})
         }
-        "history" => history(&repo, &req.path, &req.text)?,
+        "history" => history(&repo, &req.path, &req.text, req.offset, req.limit)?,
         "diff" => {
             relative(&req.path)?;
             let before = fingerprint(&repo, &req.path)?;
@@ -302,7 +319,9 @@ pub fn execute(req: Request) -> Result<Value, String> {
                 "--no-ext-diff",
                 "--no-textconv",
                 "--no-renames",
-                "--unified=3",
+                // Git doubles the context when joining hunks; i32::MAX overflows
+                // and repeats overlapping whole-file hunks for separated edits.
+                if req.whole_file { "--unified=1000000000" } else { "--unified=3" },
             ];
             let target;
             if req.mode == "staged" {
@@ -760,7 +779,101 @@ mod tests {
             text: String::new(),
             mode: String::new(),
             fingerprint: String::new(),
+            whole_file: false,
+            offset: 0,
+            limit: None,
         }
+    }
+    #[test]
+    fn whole_file_diff_includes_context_for_working_and_staged_changes() {
+        let dir = fixture();
+        let original = (1..=40).map(|n| format!("line {n}\n")).collect::<String>();
+        fs::write(dir.path().join("file.txt"), &original).unwrap();
+        git(dir.path(), &["add", "."]).unwrap();
+        git(dir.path(), &["commit", "-m", "initial"]).unwrap();
+        fs::write(dir.path().join("file.txt"), original.replace("line 20\n", "changed\n").replace("line 35\n", "second change\n")).unwrap();
+        let diff = |mode: &str, whole_file: bool| {
+            let mut req = request(dir.path(), "diff");
+            req.path = "file.txt".into();
+            req.mode = mode.into();
+            req.whole_file = whole_file;
+            execute(req).unwrap()
+        };
+        let small = diff("working", false);
+        assert!(!small["text"].as_str().unwrap().contains(" line 1\n"));
+        let full = diff("working", true);
+        let text = full["text"].as_str().unwrap();
+        assert_eq!(text.lines().filter(|line| line.starts_with("@@ ")).count(), 1);
+        assert_eq!(text.lines().filter(|line| *line == " line 1").count(), 1);
+        for expected in [" line 1\n", " line 40\n", "-line 20\n", "+changed\n"] {
+            assert!(full["text"].as_str().unwrap().contains(expected));
+        }
+        assert_eq!(small["fingerprint"], full["fingerprint"]);
+        git(dir.path(), &["add", "."]).unwrap();
+        assert_eq!(diff("staged", true)["text"], full["text"]);
+    }
+
+    #[test]
+    fn history_hides_internal_checkpoint_refs_without_hiding_branch_ancestors() {
+        let dir = fixture();
+        fs::write(dir.path().join("file.txt"), "original\n").unwrap();
+        git(dir.path(), &["add", "."]).unwrap();
+        git(dir.path(), &["commit", "-m", "t3 checkpoint mentioned in a real commit"]).unwrap();
+        let head = git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        let tree = git(dir.path(), &["rev-parse", "HEAD^{tree}"]).unwrap();
+        let checkpoint = git(dir.path(), &["commit-tree", tree.trim(), "-p", head.trim(), "-m", "internal snapshot"]).unwrap();
+        let reference = "refs/t3/checkpoints/test/turn/1";
+        git(dir.path(), &["update-ref", reference, checkpoint.trim()]).unwrap();
+        let result = execute(request(dir.path(), "history")).unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 1);
+        assert_eq!(result[0]["id"], head.trim());
+        // The hidden snapshot is still available for T3 recovery.
+        assert_eq!(git(dir.path(), &["rev-parse", reference]).unwrap().trim(), checkpoint.trim());
+        // Explicitly branching from a snapshot makes it normal branch history.
+        git(dir.path(), &["branch", "recovered", checkpoint.trim()]).unwrap();
+        let recovered = execute(request(dir.path(), "history")).unwrap();
+        assert_eq!(recovered.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn history_pages_past_150_without_gaps_and_filters_before_paging() {
+        let dir = fixture();
+        let mut input = String::new();
+        for i in 0..160 {
+            let message = format!("history {i}");
+            input.push_str(&format!("commit refs/heads/history\ncommitter Test <test@example.invalid> {} +0000\ndata {}\n{}\n\n", 1700000000 + i, message.len(), message));
+        }
+        let mut process = command(dir.path()).args(["fast-import", "--quiet"])
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        process.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        assert!(process.wait_with_output().unwrap().status.success());
+        git(dir.path(), &["symbolic-ref", "HEAD", "refs/heads/history"]).unwrap();
+        let all = execute(request(dir.path(), "history")).unwrap();
+        assert_eq!(all.as_array().unwrap().len(), 160);
+        let mut first = request(dir.path(), "history");
+        first.limit = Some(100);
+        let first = execute(first).unwrap();
+        let mut second = request(dir.path(), "history");
+        second.limit = Some(100);
+        second.offset = 100;
+        let second = execute(second).unwrap();
+        let combined: Vec<_> = first.as_array().unwrap().iter().chain(second.as_array().unwrap()).cloned().collect();
+        assert_eq!(combined, *all.as_array().unwrap());
+        let mut filtered = request(dir.path(), "history");
+        filtered.text = "history 15".into();
+        filtered.limit = Some(3);
+        filtered.offset = 2;
+        let filtered = execute(filtered).unwrap();
+        assert_eq!(filtered.as_array().unwrap().len(), 3);
+        assert_eq!(filtered[0]["subject"], "history 157");
+    }
+
+    #[test]
+    fn comparison_reports_a_missing_branch() {
+        let dir = fixture();
+        let mut req = request(dir.path(), "branch-files");
+        req.target = "missing-branch".into();
+        assert!(execute(req).unwrap_err().contains("Cannot resolve commit or branch 'missing-branch'"));
     }
     #[test]
     fn status_preserves_unusual_names_and_stale_stage_fails() {

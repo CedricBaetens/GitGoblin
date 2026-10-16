@@ -24,6 +24,8 @@ import {
   ArrowUpRight,
   FileCode2,
   Layers,
+  List,
+  ListTree,
   Tag,
   Archive,
   Globe,
@@ -38,9 +40,10 @@ import {
   LoaderCircle,
 } from "lucide-vue-next";
 import { useWorkbench } from "~/composables/useWorkbench";
-import { commitGraph } from "~/lib/graph";
+import { branchTree } from "~/lib/branches";
+import { visibleThreads } from "~/lib/threads";
 import { desktop, invoke } from "~/lib/native";
-import type { Commit, T3Thread, T3Project, GitRequest } from "~/lib/types";
+import type { Commit, T3Thread, T3Project, GitRequest, GitRef } from "~/lib/types";
 const w = useWorkbench();
 const {
   repo,
@@ -49,6 +52,8 @@ const {
   commits,
   selected,
   diff,
+  diffLoading,
+  wholeFile,
   mode,
   base,
   view,
@@ -65,13 +70,59 @@ const {
   historyDiff,
   reflog,
 } = w;
-const chatVisible = ref(true),
+const filesAsTree = ref(true);
+const repositoryMenu = ref<HTMLDivElement>();
+type SidebarItem = { label: string; disabled?: boolean; run: () => unknown };
+const sidebarMenu = ref<{ open: (event: MouseEvent | KeyboardEvent, items: SidebarItem[]) => void; close: () => void }>();
+const copyItem = (label: string, text: string): SidebarItem => ({ label, run: () => navigator.clipboard.writeText(text) });
+function actionItem(label: string, action: string, preset: Record<string, string> = {}, disabled = false): SidebarItem {
+  return { label, disabled: disabled || busy.value || example.value, run: () => ask(action, preset) };
+}
+function branchMenu(event: MouseEvent | KeyboardEvent, branch: GitRef) {
+  const local = branch.name.startsWith('refs/heads/');
+  const target = local ? branch.name.replace('refs/heads/', '') : branch.name;
+  const items = [
+    ...(local ? [actionItem('Switch to branch', 'switch', { target }, branch.current), {
+      label: 'Compare with working tree', disabled: busy.value || example.value,
+      run: () => { base.value = target; mode.value = 'branch'; view.value = 'changes'; },
+    }] : []),
+    actionItem('Create branch here…', 'branch-create', { target }),
+    actionItem('Merge into current branch…', 'merge', { target }, branch.current),
+    ...(local ? [actionItem('Delete branch…', 'branch-delete', { target }, branch.current)] : []),
+    copyItem('Copy branch name', branch.name.replace(/^refs\/(heads|remotes)\//, '')),
+    copyItem('Copy commit hash', branch.id),
+  ];
+  sidebarMenu.value?.open(event, items);
+}
+function worktreeMenu(event: MouseEvent | KeyboardEvent, path: string) {
+  sidebarMenu.value?.open(event, [
+    { label: 'Open worktree', disabled: busy.value || example.value, run: () => w.openRepo(path) },
+    actionItem('New worktree…', 'worktree-add'), copyItem('Copy worktree path', path),
+  ]);
+}
+function conversationMenu(event: MouseEvent | KeyboardEvent, thread: T3Thread) {
+  sidebarMenu.value?.open(event, [
+    { label: 'Open conversation', disabled: busy.value, run: () => { chatVisible.value = true; chat.value?.select(thread.id); } },
+    copyItem('Copy conversation title', thread.title), copyItem('Copy conversation ID', thread.id),
+  ]);
+}
+function tagMenu(event: MouseEvent | KeyboardEvent, tag: GitRef) {
+  const name = tag.name.replace('refs/tags/', '');
+  sidebarMenu.value?.open(event, [actionItem('Create branch here…', 'branch-create', { target: tag.name }), actionItem('Delete tag…', 'tag-delete', { target: name }), copyItem('Copy tag name', name)]);
+}
+function stashMenu(event: MouseEvent | KeyboardEvent, stash: string) {
+  const target = stash.split('\t')[0]!;
+  sidebarMenu.value?.open(event, [actionItem('Apply stash…', 'stash-apply', { target }), actionItem('Drop stash…', 'stash-drop', { target }), copyItem('Copy stash reference', target)]);
+}
+watch([repo, busy, example], () => sidebarMenu.value?.close());
+const chatVisible = ref(false),
   context = ref(""),
-  chat = ref<{ select: (id: string) => void; stopAll: () => Promise<void> }>(),
+  chat = ref<{ select: (id: string) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
   commitMessage = ref(""),
   amend = ref(false),
   menu = ref(false);
 const threads = ref<T3Thread[]>([]),
+  selectedThreadId = ref(''),
   projects = ref<T3Project[]>([]),
   t3Connected = ref(false);
 const normalized = (value: string) =>
@@ -88,6 +139,8 @@ const remoteBranches = computed(
     snapshot.value?.refs.filter((r) => r.name.startsWith("refs/remotes/")) ||
     [],
 );
+const localBranchTree = computed(() => branchTree(localBranches.value, "refs/heads/"));
+const remoteBranchTree = computed(() => branchTree(remoteBranches.value, "refs/remotes/"));
 const tags = computed(
   () =>
     snapshot.value?.refs.filter((r) => r.name.startsWith("refs/tags/")) || [],
@@ -102,6 +155,7 @@ const repoThreads = computed(() =>
       ) === normalized(repo.value),
   ),
 );
+const visibleRepoThreads = computed(() => visibleThreads(repoThreads.value));
 const activeAgents = computed(() =>
   repoThreads.value.filter((t) => t.activeRunId),
 );
@@ -111,16 +165,23 @@ const additions = computed(
       .split("\n")
       .filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,
 );
-const graph = computed(() => commitGraph(commits.value));
-const graphWidth = computed(() =>
-  Math.max(55, ...graph.value.map((row) => row.width * 12 + 15)),
-);
 const deletions = computed(
   () =>
     diff.value.text
       .split("\n")
       .filter((l) => l.startsWith("-") && !l.startsWith("---")).length,
 );
+const historyTab = ref("commit");
+const fileGroups = computed(() => mode.value === "branch"
+  ? [{ mode: "branch", label: "Branch changes", files: currentFiles.value }]
+  : [
+      { mode: "working", label: "Unstaged", files: working.value },
+      { mode: "staged", label: "Staged", files: staged.value },
+    ]);
+function selectFile(path: string, group: string) {
+  mode.value = group;
+  selected.value = path;
+}
 const sections = ref<Record<string, boolean>>({
   branches: true,
   worktrees: true,
@@ -354,6 +415,26 @@ async function stage() {
     });
   } catch {}
 }
+async function toggleFileStage(path: string | null, group: string, folder = false) {
+  if (busy.value || example.value || !['working', 'staged'].includes(group)) return;
+  const files = (group === 'staged' ? staged.value : working.value)
+    .filter((file) => path === null || (folder ? file.path.startsWith(`${path}/`) : file.path === path));
+  if (files.some((file) => file.conflict)) {
+    error.value = 'Resolve conflicting files before staging these changes.';
+    return;
+  }
+  try {
+    await w.stageFiles(files.map((file) => file.path), group);
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+async function toggleSelectedFiles(paths: string[], group: string) {
+  if (busy.value || example.value || !['working', 'staged'].includes(group)) return;
+  const files = (group === 'staged' ? staged.value : working.value).filter(file => paths.includes(file.path));
+  if (files.some(file => file.conflict)) { error.value = 'Resolve conflicting files before staging these changes.'; return; }
+  try { await w.stageFiles(files.map(file => file.path), group); } catch (e) { error.value = String(e); }
+}
 async function patch(text: string) {
   try {
     await w.mutate("patch", {
@@ -378,6 +459,12 @@ async function commit() {
 function addContext(text: string) {
   context.value = `File: ${selected.value || selectedCommit.value?.id || repo.value}\n\n${text}`;
   chatVisible.value = true;
+}
+async function editContext(text: string) {
+  context.value = `Repository: ${repo.value}\n\n${text}`;
+  chatVisible.value = true;
+  await nextTick();
+  chat.value?.focusComposer();
 }
 function receiveThreads(ts: T3Thread[], ps: T3Project[], connected: boolean) {
   threads.value = ts;
@@ -466,6 +553,15 @@ async function openEditor() {
     error.value = String(e);
   }
 }
+async function chooseRepository(path?: string) {
+  repositoryMenu.value?.hidePopover();
+  if (path && snapshot.value && normalized(path) === normalized(repo.value)) return;
+  try {
+    await w.openRepo(path);
+  } catch (e) {
+    error.value = String(e);
+  }
+}
 function reorder(index: number, delta: number) {
   const destination = index + delta;
   if (destination < 0 || destination >= rebaseCommits.value.length) return;
@@ -503,8 +599,8 @@ watch(amend, async (value) => {
 });
 </script>
 <template>
-  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible }">
-    <header class="titlebar">
+  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot }">
+    <header class="titlebar" data-tauri-drag-region="deep">
       <div class="brand">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <path d="M4 7l7 3 5-5 5 5 7-3-2 15-10 6L6 22z" fill="currentColor" />
@@ -514,15 +610,81 @@ watch(amend, async (value) => {
             stroke="#101114"
             stroke-width="2"
           /></svg
-        ><span>gitgoblin</span><span class="alpha">ALPHA</span>
+        ><span>gitgoblin</span>
       </div>
-      <div class="titlebar-center">
-        <GitBranch :size="13" /><span>{{
-          snapshot
-            ? `${repoName} / ${snapshot.branch}`
-            : "Your code. Your history. Your agents."
-        }}</span>
+      <div class="titlebar-context">
+        <button class="repository-switch" popovertarget="repository-menu" aria-label="Switch repository" :disabled="busy" :title="repo || 'Switch repository'">
+          <FolderGit2 :size="15" /><strong>{{ snapshot ? repoName : 'Open repository' }}</strong><ChevronDown :size="12" />
+        </button>
+        <template v-if="snapshot"><span class="context-divider">/</span><GitBranch :size="13" /><span :title="snapshot.branch">{{ snapshot.branch }}</span></template>
       </div>
+      <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
+        <div class="repository-menu-heading">Recent repositories</div>
+        <button v-for="path in recent" :key="path" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(repo) ? 'true' : undefined" @click="chooseRepository(path)">
+          <FolderGit2 :size="16" /><span><strong>{{ path.replaceAll('\\', '/').split('/').at(-1) }}</strong><small>{{ path }}</small></span><Check v-if="normalized(path) === normalized(repo)" :size="14" />
+        </button>
+        <p v-if="!recent.length" class="nav-hint">Opened repositories will appear here.</p>
+        <button class="repository-menu-open" :disabled="busy" @click="chooseRepository()"><Plus :size="16" />Open repository...<kbd>Ctrl O</kbd></button>
+      </div>
+          <div v-if="snapshot" class="toolbar-actions" aria-label="Git actions">
+            <button
+              title="Fetch remote changes"
+              :disabled="busy || example"
+              @click="ask('fetch')"
+            >
+              <ArrowDownToLine :size="15" /><span>Fetch</span></button
+            ><button title="Pull changes" :disabled="busy || example" @click="ask('pull')">
+              <ArrowDownToLine :size="15" /><span>Pull</span></button
+            ><button title="Push branch" :disabled="busy || example" @click="ask('push')">
+              <ArrowUpFromLine :size="15" /><span>Push</span></button
+            ><span class="toolbar-divider" /><button
+              title="Stash changes"
+              :disabled="busy || example"
+              @click="ask('stash-save')"
+            >
+              <Archive :size="15" /><span>Stash</span></button
+            ><button
+              title="Refresh (Ctrl R)"
+              :disabled="busy"
+              @click="w.refresh(true)"
+            >
+              <RefreshCw :size="15" :class="{ spin: busy }" />
+            </button>
+            <div class="menu-anchor">
+              <button title="More Git operations" @click="menu = !menu">
+                <MoreHorizontal :size="18" />
+              </button>
+              <div v-if="menu" class="dropdown">
+                <button
+                  v-for="action in [
+                    'branch-create',
+                    'branch-delete',
+                    'merge',
+                    'rebase',
+                    'cherry-pick',
+                    'revert',
+                    'reset',
+                    'tag-create',
+                    'tag-delete',
+                    'stash-save',
+                    'stash-drop',
+                    'remote-add',
+                    'remote-remove',
+                  ]"
+                  :key="action"
+                  :disabled="example"
+                  @click="
+                    ask(
+                      action,
+                      selectedCommit ? { target: selectedCommit.id } : {},
+                    )
+                  "
+                >
+                  {{ definitions[action]!.title }}
+                </button>
+              </div>
+            </div>
+          </div>
       <button
         class="icon-button"
         :title="chatVisible ? 'Hide conversations' : 'Show conversations'"
@@ -533,6 +695,7 @@ watch(amend, async (value) => {
           :size="17"
         />
       </button>
+      <WindowControls v-if="desktop()" @error="error = $event" />
     </header>
     <aside class="sidebar">
       <div class="repository-picker">
@@ -565,7 +728,7 @@ watch(amend, async (value) => {
               :class="{ active: view === 'history' }"
               @click="view = 'history'"
             >
-              <History :size="16" />Commit history</button
+              <History :size="16" />All commits</button
             ><button
               :class="{ active: view === 'reflog' }"
               @click="view = 'reflog'"
@@ -583,24 +746,8 @@ watch(amend, async (value) => {
                 :size="12"
               />BRANCHES<span>{{ localBranches.length }}</span></button
             ><template v-if="sections.branches"
-              ><button
-                v-for="branch in localBranches"
-                :key="branch.name"
-                class="tree-row"
-                :class="{ current: branch.current }"
-                :title="branch.name"
-                @click="
-                  !branch.current &&
-                  ask('switch', {
-                    target: branch.name.replace('refs/heads/', ''),
-                  })
-                "
-              >
-                <GitBranch :size="14" /><span>{{
-                  branch.name.replace("refs/heads/", "")
-                }}</span
-                ><span v-if="branch.current" class="status-dot live" /></button
-              ><button class="tree-row subdued" @click="ask('branch-create')">
+              ><BranchTree :key="repo" :nodes="localBranchTree" @context="branchMenu" @select="branch => !branch.current && ask('switch', { target: branch.name.replace('refs/heads/', '') })" />
+              <button class="tree-row subdued" @click="ask('branch-create')">
                 <Plus :size="13" />New branch
               </button></template
             >
@@ -620,6 +767,7 @@ watch(amend, async (value) => {
                 :key="tree.path"
                 class="tree-row"
                 :title="tree.path"
+                aria-haspopup="menu" @contextmenu="worktreeMenu($event, tree.path)" @keydown.shift.f10.prevent="worktreeMenu($event, tree.path)"
                 @click="!example && w.openRepo(tree.path)"
               >
                 <FolderGit2 :size="14" /><span>{{ tree.branch }}</span
@@ -642,7 +790,7 @@ watch(amend, async (value) => {
                 v-else
                 :size="12"
               />CONVERSATIONS<span>{{
-                example ? 2 : repoThreads.length
+                example ? 2 : visibleRepoThreads.length
               }}</span></button
             ><template v-if="sections.chats"
               ><template v-if="example"
@@ -656,9 +804,12 @@ watch(amend, async (value) => {
                   >
                 </button></template
               ><button
-                v-for="thread in repoThreads"
+                v-for="thread in visibleRepoThreads"
                 :key="thread.id"
+                aria-haspopup="menu" @contextmenu="conversationMenu($event, thread)" @keydown.shift.f10.prevent="conversationMenu($event, thread)"
                 class="tree-row"
+                :class="{ current: selectedThreadId === thread.id }"
+                :aria-current="selectedThreadId === thread.id ? 'true' : undefined"
                 @click="
                   chatVisible = true;
                   chat?.select(thread.id);
@@ -669,7 +820,7 @@ watch(amend, async (value) => {
                   :class="{ live: !!thread.activeRunId }"
                 /><span>{{ thread.title }}</span>
               </button>
-              <p v-if="!example && !repoThreads.length" class="nav-hint">
+              <p v-if="!example && !visibleRepoThreads.length" class="nav-hint">
                 {{
                   t3Connected
                     ? "No chats in this worktree"
@@ -688,16 +839,8 @@ watch(amend, async (value) => {
                 :size="12"
               /><Globe :size="13" />REMOTES</button
             ><template v-if="sections.remotes"
-              ><button
-                v-for="branch in remoteBranches"
-                :key="branch.name"
-                class="tree-row"
-                @click="ask('merge', { target: branch.name })"
-              >
-                <GitBranch :size="13" /><span>{{
-                  branch.name.replace("refs/remotes/", "")
-                }}</span></button
-              ><button class="tree-row subdued" @click="ask('remote-add')">
+              ><BranchTree :key="repo" :nodes="remoteBranchTree" @context="branchMenu" @select="branch => ask('merge', { target: branch.name })" />
+              <button class="tree-row subdued" @click="ask('remote-add')">
                 <Plus :size="13" />Add remote
               </button></template
             ><button
@@ -712,6 +855,7 @@ watch(amend, async (value) => {
               ><button
                 v-for="tag in tags"
                 :key="tag.name"
+                aria-haspopup="menu" @contextmenu="tagMenu($event, tag)" @keydown.shift.f10.prevent="tagMenu($event, tag)"
                 class="tree-row"
                 @click="
                   ask('tag-delete', {
@@ -740,6 +884,7 @@ watch(amend, async (value) => {
                   .split('\n')
                   .filter(Boolean)"
                 :key="stash"
+                aria-haspopup="menu" @contextmenu="stashMenu($event, stash)" @keydown.shift.f10.prevent="stashMenu($event, stash)"
                 class="tree-row"
                 @click="ask('stash-apply', { target: stash.split('\t')[0]! })"
               >
@@ -796,77 +941,6 @@ watch(amend, async (value) => {
         </button>
       </div>
       <template v-if="snapshot">
-        <div class="workspace-toolbar">
-          <div class="breadcrumb">
-            <FolderGit2 :size="15" /><strong>{{ repoName }}</strong
-            ><ChevronRight :size="13" /><span>{{
-              view === "changes"
-                ? "Local changes"
-                : view === "history"
-                  ? "Commit history"
-                  : "Reflog"
-            }}</span>
-          </div>
-          <div class="toolbar-actions">
-            <button
-              title="Fetch remote changes"
-              :disabled="busy || example"
-              @click="ask('fetch')"
-            >
-              <ArrowDownToLine :size="15" /><span>Fetch</span></button
-            ><button :disabled="busy || example" @click="ask('pull')">
-              <ArrowDownToLine :size="15" /><span>Pull</span></button
-            ><button :disabled="busy || example" @click="ask('push')">
-              <ArrowUpFromLine :size="15" /><span>Push</span></button
-            ><span class="toolbar-divider" /><button
-              title="Stash changes"
-              :disabled="busy || example"
-              @click="ask('stash-save')"
-            >
-              <Archive :size="15" /></button
-            ><button
-              title="Refresh (Ctrl R)"
-              :disabled="busy"
-              @click="w.refresh(true)"
-            >
-              <RefreshCw :size="15" :class="{ spin: busy }" />
-            </button>
-            <div class="menu-anchor">
-              <button title="More Git operations" @click="menu = !menu">
-                <MoreHorizontal :size="18" />
-              </button>
-              <div v-if="menu" class="dropdown">
-                <button
-                  v-for="action in [
-                    'branch-create',
-                    'branch-delete',
-                    'merge',
-                    'rebase',
-                    'cherry-pick',
-                    'revert',
-                    'reset',
-                    'tag-create',
-                    'tag-delete',
-                    'stash-save',
-                    'stash-drop',
-                    'remote-add',
-                    'remote-remove',
-                  ]"
-                  :key="action"
-                  :disabled="example"
-                  @click="
-                    ask(
-                      action,
-                      selectedCommit ? { target: selectedCommit.id } : {},
-                    )
-                  "
-                >
-                  {{ definitions[action]!.title }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
         <div v-if="snapshot.operation" class="operation-banner">
           <GitMerge :size="16" /><strong
             >{{ snapshot.operation }} in progress</strong
@@ -911,22 +985,13 @@ watch(amend, async (value) => {
           </div>
           <div class="review-grid">
             <section class="files-panel">
+              <div class="files-toolbar">
               <div class="segmented">
-                <button
-                  :class="{ active: mode === 'working' }"
-                  @click="mode = 'working'"
-                >
-                  Changes <span>{{ working.length }}</span></button
-                ><button
-                  :class="{ active: mode === 'staged' }"
-                  @click="mode = 'staged'"
-                >
-                  Staged <span>{{ staged.length }}</span></button
-                ><button
-                  :class="{ active: mode === 'branch' }"
-                  @click="mode = 'branch'"
-                >
-                  Branch
+                <button :class="{ active: mode !== 'branch' }" @click="mode = 'working'">Local changes</button>
+                <button :class="{ active: mode === 'branch' }" :disabled="!base" @click="mode = 'branch'">Compare branch</button>
+              </div>
+                <button class="icon-button file-view-toggle" :aria-label="filesAsTree ? 'Show files as a list' : 'Show files as a tree'" :title="filesAsTree ? 'Show files as a list' : 'Show files as a tree'" :aria-pressed="filesAsTree" @click="filesAsTree = !filesAsTree">
+                  <ListTree v-if="filesAsTree" :size="16" /><List v-else :size="16" />
                 </button>
               </div>
               <div v-if="mode === 'branch'" class="base-picker">
@@ -941,100 +1006,21 @@ watch(amend, async (value) => {
                   </option>
                 </select>
               </div>
-              <div class="file-list">
-                <div class="file-list-label">
-                  {{
-                    mode === "staged"
-                      ? "READY TO COMMIT"
-                      : mode === "branch"
-                        ? "BRANCH CHANGES"
-                        : "WORKING DIRECTORY"
-                  }}<span>{{ currentFiles.length }}</span>
-                </div>
-                <button
-                  v-for="file in currentFiles"
-                  :key="file.path"
-                  class="file-row"
-                  :class="{ active: selected === file.path }"
-                  :title="file.path"
-                  @click="selected = file.path"
-                >
-                  <FileCode2 :size="15" />
-                  <div>
-                    <span>{{ file.path.split("/").at(-1) }}</span
-                    ><small>{{
-                      file.path.includes("/")
-                        ? file.path.slice(0, file.path.lastIndexOf("/"))
-                        : "Repository root"
-                    }}</small>
-                  </div>
-                  <span
-                    class="file-status"
-                    :class="{
-                      added: file.worktree === '?' || file.index === 'A',
-                      conflicted: file.conflict,
-                    }"
-                    >{{
-                      file.conflict
-                        ? "!"
-                        : file.worktree === "?"
-                          ? "U"
-                          : mode === "staged"
-                            ? file.index
-                            : file.worktree === " "
-                              ? "M"
-                              : file.worktree
-                    }}</span
-                  >
-                </button>
-                <div v-if="!currentFiles.length" class="small-empty">
+              <div v-for="group in fileGroups" :key="group.mode" class="file-group">
+                <div class="file-list-label">{{ group.label }}<span>{{ group.files.length }}</span><button v-if="group.mode !== 'branch'" class="stage-all" :disabled="busy || example || !group.files.length || group.files.some(file => file.conflict)" :title="group.files.some(file => file.conflict) ? 'Resolve conflicting files first' : undefined" @click="toggleFileStage(null, group.mode)">{{ group.mode === 'staged' ? 'Unstage all' : 'Stage all' }}</button></div>
+                <div class="file-list">
+                <FileList :key="repo" :files="group.files" :tree="filesAsTree" :selected="mode === group.mode ? selected : ''" :mode="group.mode" :editable="!busy && !example && group.mode !== 'branch'" @select="selectFile($event, group.mode)" @toggle-selection="toggleSelectedFiles($event, group.mode)" @toggle-stage="toggleFileStage($event, group.mode)" @toggle-folder="toggleFileStage($event, group.mode, true)" />
+                <div v-if="!group.files.length" class="small-empty">
                   <Check :size="23" />
                   <p>
                     {{
-                      mode === "staged"
+                      group.mode === "staged"
                         ? "No staged changes"
                         : "Nothing to review here"
                     }}
                   </p>
                 </div>
               </div>
-              <div class="commit-box">
-                <div class="commit-box-heading">
-                  <GitCommitHorizontal :size="16" /><strong>{{
-                    amend ? "Amend commit" : "Commit changes"
-                  }}</strong
-                  ><span>{{ staged.length }} staged</span>
-                </div>
-                <textarea
-                  v-model="commitMessage"
-                  aria-label="Commit message"
-                  placeholder="A short, meaningful commit message"
-                  :disabled="example"
-                  @keydown.ctrl.enter.prevent="commit"
-                />
-                <div class="commit-options">
-                  <label
-                    ><input
-                      v-model="amend"
-                      type="checkbox"
-                      :disabled="example || !snapshot.head"
-                    />Amend last commit</label
-                  ><kbd>Ctrl ↵</kbd>
-                </div>
-                <button
-                  class="primary commit-button"
-                  :disabled="
-                    busy ||
-                    example ||
-                    !commitMessage.trim() ||
-                    (!staged.length && !amend)
-                  "
-                  @click="commit"
-                >
-                  <Check :size="15" />{{
-                    amend ? "Amend commit" : "Commit staged changes"
-                  }}
-                </button>
               </div>
             </section>
             <section class="review-panel">
@@ -1048,7 +1034,7 @@ watch(amend, async (value) => {
                   ><button
                     v-if="mode !== 'branch' && !selectedFile?.conflict"
                     class="secondary small"
-                    :disabled="busy || example || !diff.fingerprint"
+                    :disabled="busy || diffLoading || example || !diff.fingerprint"
                     @click="stage"
                   >
                     {{
@@ -1063,7 +1049,7 @@ watch(amend, async (value) => {
                   </button>
                 </div>
                 <div class="file-tools">
-                  <span>Unified diff</span>
+                  <span>File changes</span>
                   <div>
                     <button
                       class="text-button"
@@ -1084,15 +1070,19 @@ watch(amend, async (value) => {
                 </div>
                 <DiffViewer
                   :text="diff.text"
+                  :path="selected"
+                  :loading="diffLoading"
+                  :disabled="busy"
+                  v-model:whole-file="wholeFile"
                   :mode="mode"
                   :editable="
-                    !busy &&
                     !example &&
                     mode !== 'branch' &&
                     !selectedFile?.conflict
                   "
                   @patch="patch"
                   @context="addContext"
+                  @edit-context="editContext"
               /></template>
               <div v-else class="panel-empty clean-state">
                 <div class="empty-orbit"><Check :size="25" /></div>
@@ -1112,13 +1102,44 @@ watch(amend, async (value) => {
                 </p>
               </div>
             </section>
+              <div class="commit-box">
+                <textarea
+                  v-model="commitMessage"
+                  aria-label="Commit message"
+                  placeholder="Commit message"
+                  :disabled="example"
+                  @keydown.ctrl.enter.prevent="commit"
+                />
+                <div class="commit-options">
+                  <label
+                    ><input
+                      v-model="amend"
+                      type="checkbox"
+                      :disabled="example || !snapshot.head"
+                    />Amend last commit</label
+                  ><kbd>Ctrl ↵</kbd><span class="staged-count">{{ staged.length }} staged</span>
+                </div>
+                <button
+                  class="primary commit-button"
+                  :disabled="
+                    busy ||
+                    example ||
+                    !commitMessage.trim() ||
+                    (!staged.length && !amend)
+                  "
+                  @click="commit"
+                >
+                  <Check :size="15" />{{
+                    amend ? "Amend" : "Commit"
+                  }}
+                </button>
+              </div>
           </div>
         </template>
         <template v-else-if="view === 'history'"
           ><div class="changes-title">
             <div>
-              <h1>Commit history</h1>
-              <p>The story behind your code</p>
+              <h1>All commits</h1>
             </div>
             <form class="search-field" @submit.prevent="w.searchHistory()">
               <Search :size="15" /><input
@@ -1128,38 +1149,12 @@ watch(amend, async (value) => {
               />
             </form>
           </div>
-          <div
-            class="history-list"
-            :style="{ '--graph-width': `${graphWidth}px` }"
-          >
-            <div class="history-columns">
-              <span>GRAPH</span><span>COMMIT</span><span>AUTHOR</span
-              ><span>HASH</span>
+          <HistoryList :commits="commits" :selected="selectedCommit?.id" :loading="w.historyLoading.value" :has-more="w.historyHasMore.value" @select="w.selectCommit" @load-more="w.loadHistory()" />
+          <div class="commit-detail">
+            <div class="detail-tabs" role="tablist" aria-label="Commit details">
+              <button v-for="tab in ['commit', 'changes']" :key="tab" role="tab" :aria-selected="historyTab === tab" :class="{ active: historyTab === tab }" @click="historyTab = tab">{{ tab === 'commit' ? 'Commit' : 'Changes' }}</button>
             </div>
-            <button
-              v-for="(commit, i) in commits"
-              :key="commit.id"
-              class="commit-row"
-              :class="{ active: selectedCommit?.id === commit.id }"
-              @click="w.selectCommit(commit)"
-            >
-              <HistoryGraph v-if="graph[i]" :row="graph[i]!" /><span
-                class="commit-subject"
-                >{{ commit.subject
-                }}<span v-if="commit.refs" class="ref-label">{{
-                  commit.refs
-                }}</span></span
-              ><span class="commit-author">{{ commit.author }}</span
-              ><code>{{ commit.id.slice(0, 7) }}</code>
-            </button>
-            <p v-if="!commits.length" class="small-empty">
-              No matching commits.
-            </p>
-            <p class="history-limit">
-              Showing up to 150 commits. Search to narrow the history.
-            </p>
-          </div>
-          <div v-if="selectedCommit" class="commit-detail">
+            <template v-if="selectedCommit">
             <div class="panel-heading">
               <span
                 ><GitCommitHorizontal :size="15" />{{
@@ -1188,12 +1183,21 @@ watch(amend, async (value) => {
                 </button>
               </div>
             </div>
+            <div v-if="historyTab === 'commit'" class="commit-metadata">
+              <div class="commit-identity"><span class="author-avatar">{{ selectedCommit.author.slice(0, 2).toUpperCase() }}</span><div><small>AUTHOR</small><strong>{{ selectedCommit.author }}</strong><span>{{ selectedCommit.date }}</span></div></div>
+              <dl><dt>SHA</dt><dd><code>{{ selectedCommit.id }}</code></dd><dt>Parents</dt><dd><code>{{ selectedCommit.parents || 'Initial commit' }}</code></dd><dt v-if="selectedCommit.refs">Refs</dt><dd v-if="selectedCommit.refs">{{ selectedCommit.refs }}</dd></dl>
+              <p>{{ selectedCommit.subject }}</p>
+            </div>
             <DiffViewer
+              v-else
               :text="historyDiff"
               mode="history"
               @context="addContext"
-            /></div
-        ></template>
+              @edit-context="editContext"
+            />
+            </template>
+            <div v-else class="panel-empty"><GitCommitHorizontal :size="24" /><p>Select a commit to inspect its details and changes.</p></div>
+          </div></template>
         <template v-else
           ><div class="changes-title">
             <div>
@@ -1262,7 +1266,9 @@ watch(amend, async (value) => {
         ><span>{{ desktop() ? "Desktop" : "Browser preview" }}</span>
       </footer>
     </main>
+    <ContextMenu ref="sidebarMenu" @error="error = $event" />
     <ChatPanel
+      :visible="chatVisible"
       v-show="chatVisible"
       ref="chat"
       :context="context"
@@ -1271,6 +1277,7 @@ watch(amend, async (value) => {
       @clear-context="context = ''"
       @select-worktree="openThreadWorktree"
       @threads="receiveThreads"
+      @selection="selectedThreadId = $event"
     />
     <Teleport to="body">
       <div

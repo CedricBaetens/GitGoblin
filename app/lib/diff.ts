@@ -10,6 +10,51 @@ export interface Hunk {
   start: number;
   lines: DiffLine[];
 }
+
+export interface SplitRow {
+  left?: DiffLine;
+  right?: DiffLine;
+}
+
+export function splitDiffLines(lines: DiffLine[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let left: DiffLine[] = [], right: DiffLine[] = [];
+  let leftMeta: DiffLine[] = [], rightMeta: DiffLine[] = [];
+  let previous: DiffLine["kind"] = "context";
+  const flush = () => {
+    for (let i = 0; i < Math.max(left.length, right.length); i++)
+      rows.push({ left: left[i], right: right[i] });
+    for (let i = 0; i < Math.max(leftMeta.length, rightMeta.length); i++)
+      rows.push({ left: leftMeta[i], right: rightMeta[i] });
+    left = []; right = []; leftMeta = []; rightMeta = [];
+  };
+  for (const line of lines) {
+    if (line.kind === "delete") left.push(line);
+    else if (line.kind === "add") right.push(line);
+    else if (line.kind === "meta" && previous === "delete") leftMeta.push(line);
+    else if (line.kind === "meta" && previous === "add") rightMeta.push(line);
+    else {
+      flush();
+      rows.push({ left: line, right: line });
+    }
+    if (line.kind !== "meta") previous = line.kind;
+  }
+  flush();
+  return rows;
+}
+
+export function parseDiffFiles(text: string) {
+  let offset = 0;
+  return text.split(/(?=^diff --git )/m).map((part) => {
+    const file = parseDiff(part);
+    for (const hunk of file.hunks) {
+      hunk.start += offset;
+      for (const line of hunk.lines) line.index += offset;
+    }
+    offset += part.split("\n").length - 1;
+    return file;
+  });
+}
 export function parseDiff(text: string): { header: string; hunks: Hunk[] } {
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
