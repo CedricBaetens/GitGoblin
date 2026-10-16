@@ -615,7 +615,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
             }
             let mut cmd = command(&repo);
             cmd.env("GIT_EDITOR", "true").args([
-                &req.mode,
+                req.mode.as_str(),
                 if req.action == "continue" {
                     "--continue"
                 } else {
