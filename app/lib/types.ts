@@ -10,6 +10,9 @@ export interface GitRef {
   id: string;
   current: boolean;
   upstream: string;
+  ahead?: number;
+  behind?: number;
+  upstreamGone?: boolean;
 }
 export interface Snapshot {
   root: string;
@@ -91,4 +94,14 @@ export interface T3Projection {
   messages: T3Message[];
   runtimeRequests: T3Request[];
   turnItems: Record<string, unknown>[];
+  activities?: T3Activity[];
+}
+export interface T3Activity {
+  id: string;
+  kind: string;
+  summary: string;
+  tone: string;
+  turnId: string | null;
+  createdAt: string;
+  payload?: { toolCallId?: string; status?: string; title?: string };
 }

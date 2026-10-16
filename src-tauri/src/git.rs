@@ -53,6 +53,7 @@ pub fn command(repo: &Path) -> Command {
         ])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C")
         .env("GIT_LITERAL_PATHSPECS", "1");
     #[cfg(windows)]
     {
@@ -264,7 +265,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
                 &repo,
                 &[
                     "for-each-ref",
-                    "--format=%(refname)%09%(objectname)%09%(HEAD)%09%(upstream:short)",
+                    "--format=%(refname)%09%(objectname)%09%(HEAD)%09%(upstream:short)%09%(upstream:track,nobracket)",
                     "refs/heads",
                     "refs/remotes",
                     "refs/tags",
@@ -274,8 +275,10 @@ pub fn execute(req: Request) -> Result<Value, String> {
                 .lines()
                 .filter_map(|line| {
                     let f: Vec<_> = line.split('\t').collect();
-                    (f.len() >= 4)
-                        .then(|| json!({"name":f[0],"id":f[1],"current":f[2]=="*","upstream":f[3]}))
+                    if f.len() < 5 { return None; }
+                    let count = |prefix: &str| f[4].split(',').find_map(|part| part.trim().strip_prefix(prefix)?.parse::<usize>().ok()).unwrap_or(0);
+                    Some(json!({"name":f[0],"id":f[1],"current":f[2]=="*","upstream":f[3],
+                        "ahead":count("ahead "),"behind":count("behind "),"upstreamGone":f[4]=="gone"}))
                 })
                 .collect();
             let branch = git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
@@ -784,6 +787,42 @@ mod tests {
             limit: None,
         }
     }
+    #[test]
+    fn snapshot_reports_divergence_and_missing_upstreams() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        let base = git(repo, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        git(repo, &["remote", "add", "origin", "."]).unwrap();
+        git(repo, &["update-ref", "refs/remotes/origin/main", &base]).unwrap();
+        git(repo, &["checkout", "-b", "topic"]).unwrap();
+        git(repo, &["branch", "--set-upstream-to=origin/main", "topic"]).unwrap();
+        let branch = |name: &str| {
+            let snapshot = execute(request(repo, "snapshot")).unwrap();
+            snapshot["refs"].as_array().unwrap().iter().find(|r| r["name"] == format!("refs/heads/{name}")).unwrap().clone()
+        };
+        assert_eq!(branch("topic")["ahead"], 0);
+        assert_eq!(branch("topic")["behind"], 0);
+        git(repo, &["commit", "--allow-empty", "-m", "local"]).unwrap();
+        assert_eq!(branch("topic")["ahead"], 1);
+        assert_eq!(branch("topic")["behind"], 0);
+        let tree = git(repo, &["rev-parse", "HEAD^{tree}"]).unwrap().trim().to_string();
+        let remote = git(repo, &["commit-tree", &tree, "-p", &base, "-m", "remote"]).unwrap().trim().to_string();
+        git(repo, &["update-ref", "refs/remotes/origin/main", &remote]).unwrap();
+        assert_eq!(branch("topic")["ahead"], 1);
+        assert_eq!(branch("topic")["behind"], 1);
+        git(repo, &["branch", "behind", &base]).unwrap();
+        git(repo, &["branch", "--set-upstream-to=origin/main", "behind"]).unwrap();
+        assert_eq!(branch("behind")["ahead"], 0);
+        assert_eq!(branch("behind")["behind"], 1);
+        git(repo, &["branch", "unpublished"]).unwrap();
+        assert_eq!(branch("unpublished")["upstream"], "");
+        assert_eq!(branch("unpublished")["upstreamGone"], false);
+        git(repo, &["update-ref", "-d", "refs/remotes/origin/main"]).unwrap();
+        assert_eq!(branch("topic")["upstreamGone"], true);
+        assert_eq!(branch("topic")["ahead"], 0);
+    }
+
     #[test]
     fn whole_file_diff_includes_context_for_working_and_staged_changes() {
         let dir = fixture();

@@ -161,13 +161,20 @@ describe("T3 client contract", () => {
     const receive = (item: unknown) => socket.receive({ _tag: "Chunk", requestId: subscription, values: [item] });
     receive({ kind: "snapshot", snapshot: { thread: { ...thread, messages: [] } } });
     for (const [text, streaming] of [["Hel", true], ["lo", true], ["", false]]) {
+      const previous = client.projection?.messages[0];
       receive({ kind: "event", event: { type: "thread.message-sent", payload: {
         messageId: "reply", role: "assistant", text, streaming, createdAt: "2026-10-16" } } });
+      expect(client.projection?.messages[0]).not.toBe(previous);
+      expect(client.projection?.messages[0]?.streaming).toBe(streaming);
     }
     expect(client.projection?.messages).toMatchObject([{ id: "reply", text: "Hello", streaming: false }]);
     socket.receive({ _tag: "Chunk", requestId: socket.sent[0].id, values: [{ kind: "thread-upserted", thread: {
       ...thread, latestTurn: { state: "running", turnId: "turn" } } }] });
     expect(client.threads[0]?.activeRunId).toBe("turn");
+    receive({ kind: "event", event: { type: "thread.activity-appended", payload: { activity: {
+      id: 'activity', turnId: 'turn', tone: 'tool', kind: 'tool.started', summary: 'Reading file', createdAt: '2026-10-16',
+    } } } });
+    expect(client.projection?.activities).toMatchObject([{ summary: 'Reading file' }]);
   });
   it("keeps the newer message protocol and surfaces string defects", async () => {
     const client = new T3Client(async () => "ws://127.0.0.1/ws");
@@ -203,5 +210,25 @@ describe("T3 client contract", () => {
       values: [{ kind: "snapshot", projection: { thread: { id: "one" } } }],
     });
     expect(client.projection).toBeUndefined();
+  });
+  it("applies modern streamed text, activity and run completion without waiting for a new snapshot", async () => {
+    const client = new T3Client(async () => "ws://127.0.0.1/ws");
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const thread = { id: 'one', activeRunId: 'run', status: 'running' };
+    socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [{ kind: 'snapshot', snapshot: { schemaVersion: 2, projects: [], threads: [thread] } }] });
+    client.selectThread('one');
+    const id = socket.sent.at(-1).id;
+    const receive = (value: unknown) => socket.receive({ _tag: 'Chunk', requestId: id, values: [value] });
+    receive({ kind: 'snapshot', projection: { thread, messages: [], turnItems: [], runtimeRequests: [] } });
+    for (const text of ['Hel', 'Hello']) {
+      receive({ kind: 'event', event: { type: 'message.updated', payload: { id: 'reply', role: 'assistant', text, streaming: true, createdAt: '2026-10-16' } } });
+      expect(client.projection?.messages[0]?.text).toBe(text);
+    }
+    receive({ kind: 'event', event: { type: 'turn-item.updated', payload: { id: 'tool', type: 'command_execution', runId: 'run', title: 'Run tests', status: 'running' } } });
+    expect(client.projection?.turnItems).toMatchObject([{ title: 'Run tests', status: 'running' }]);
+    receive({ kind: 'event', event: { type: 'thread.updated', payload: { ...thread, activeRunId: null, status: 'idle' } } });
+    expect(client.threads[0]?.activeRunId).toBeNull();
   });
 });

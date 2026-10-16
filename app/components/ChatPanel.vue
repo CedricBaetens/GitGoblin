@@ -11,7 +11,12 @@ import {
   MessageSquare,
   ShieldCheck,
   ChevronRight,
+  LoaderCircle,
+  Check,
+  CircleAlert,
+  Wrench,
 } from "lucide-vue-next";
+import { chatActivities } from '~/lib/chat-activity';
 import { visibleThreads } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop } from "~/lib/native";
@@ -88,6 +93,13 @@ const requests = computed(
     [],
 );
 const connected = computed(() => state.value === "connected");
+const streaming = computed(() => messages.value.some(message => message.role === 'assistant' && message.streaming));
+const busy = computed(() => !!thread.value?.activeRunId || ['starting', 'running', 'busy'].includes(thread.value?.status || '') || streaming.value);
+const activities = computed(() => chatActivities(projection.value, thread.value?.activeRunId));
+const activityStatus = computed(() => sending.value ? 'Sending instruction…' : requests.value.length ? 'Waiting for approval'
+  : streaming.value ? 'Responding…' : busy.value ? 'Working…'
+  : thread.value?.status === 'error' ? 'Task failed' : 'Ready');
+watch(activities, () => void scrollToLatest(), { flush: 'post' });
 const matchingThreads = computed(() =>
   threads.value.filter(
     (t) =>
@@ -335,9 +347,17 @@ defineExpose({
         >
           <span class="message-role"
             >{{ message.role
-            }}<span v-if="message.streaming" class="status-dot live"
-          /></span>
-          <p class="message-text">{{ message.text }}</p>
+            }}<span v-if="message.streaming" class="streaming-label"><LoaderCircle class="spin" :size="11" />Live</span></span>
+          <p class="message-text">{{ message.text }}<span v-if="message.streaming" class="streaming-cursor" aria-hidden="true" /></p>
+        </div>
+        <div v-if="activities.length" class="chat-activities" aria-label="Recent agent activity">
+          <div v-for="activity in activities" :key="activity.id" class="chat-activity" :title="activity.title">
+            <CircleAlert v-if="activity.status === 'failed' || activity.status === 'error'" :size="13" class="activity-error" />
+            <Check v-else-if="activity.status === 'completed'" :size="13" class="activity-done" />
+            <LoaderCircle v-else-if="busy && ['running', 'pending', 'inProgress', 'in_progress'].includes(activity.status)" :size="13" class="spin" />
+            <Wrench v-else :size="13" />
+            <span>{{ activity.title }}</span>
+          </div>
         </div>
         <div v-for="request in requests" :key="request.id" class="approval">
           <strong><ShieldCheck :size="15" />{{ request.kind }}</strong>
@@ -394,6 +414,13 @@ defineExpose({
       </button>
     </div>
     <div class="composer">
+      <div v-if="connected && thread && !example" class="agent-status" role="status" aria-live="polite">
+        <LoaderCircle v-if="(busy || sending) && !requests.length" class="spin" :size="13" />
+        <ShieldCheck v-else-if="requests.length" :size="13" />
+        <CircleAlert v-else-if="thread.status === 'error'" :size="13" />
+        <Check v-else :size="13" />
+        <span>{{ activityStatus }}</span>
+      </div>
       <div v-if="context" class="context-chip">
         <span>Selected diff attached</span
         ><button
@@ -536,3 +563,17 @@ defineExpose({
     >
   </aside>
 </template>
+
+<style scoped>
+.agent-status { display: flex; align-items: center; gap: 7px; min-height: 26px; margin-bottom: 5px; color: #9baed4; font-size: 11px; }
+.chat-activities { border-left: 1px solid var(--line); margin: 8px 0 16px 5px; padding-left: 10px; }
+.chat-activity { display: flex; align-items: center; gap: 7px; min-height: 25px; font-size: 11px; color: #8e9bb4; }
+.chat-activity svg { flex-shrink: 0; }
+.chat-activity span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.activity-done { color: #81bda2; }
+.activity-error { color: #e48791; }
+.streaming-label { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: #9baed4; }
+.streaming-cursor { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: #a8b6ec; animation: cursor-pulse 1s ease-in-out infinite alternate; }
+@keyframes cursor-pulse { to { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .streaming-cursor, .spin { animation: none; } }
+</style>

@@ -307,6 +307,7 @@ export class T3Client {
             messages: item.snapshot.thread.messages || [],
             runtimeRequests: [],
             turnItems: [],
+            activities: item.snapshot.thread.activities || [],
           } : undefined);
           this.onChange();
         } else if (item.kind === "event") {
@@ -316,10 +317,14 @@ export class T3Client {
           if (event.type === "thread.message-sent" && event.payload?.messageId) {
             const incoming = { ...event.payload, id: event.payload.messageId };
             const old = p.messages.find((message) => message.id === incoming.id);
-            if (old) Object.assign(old, incoming, {
+            const message = old ? { ...old, ...incoming,
               text: incoming.streaming ? old.text + incoming.text : incoming.text || old.text,
-            });
-            else p.messages.push(incoming);
+            } : incoming;
+            p.messages = old ? p.messages.map(value => value.id === message.id ? message : value) : [...p.messages, message];
+          }
+          if (event.type === "thread.activity-appended" && event.payload?.activity?.id) {
+            const activity = event.payload.activity;
+            p.activities = [...(p.activities || []).filter(value => value.id !== activity.id), activity];
           }
           const fields: Record<string, string> = {
             "message.created": "messages",
@@ -337,7 +342,10 @@ export class T3Client {
               event.payload,
             ];
           }
-          if (event.type === "thread.updated") p.thread = event.payload;
+          if (event.type === "thread.updated") {
+            p.thread = normalizeThread(event.payload);
+            this.threads = this.threads.map(thread => thread.id === p.thread.id ? p.thread : thread);
+          }
           this.onChange();
         }
       },

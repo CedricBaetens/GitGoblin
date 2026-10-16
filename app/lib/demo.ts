@@ -26,6 +26,8 @@ export const demoSnapshot: Snapshot = {
       id: "f37a21d",
       current: true,
       upstream: "origin/feat/agent-workspace",
+      ahead: 3,
+      behind: 2,
     },
     {
       name: "refs/heads/main",

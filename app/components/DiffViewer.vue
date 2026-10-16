@@ -109,7 +109,7 @@ const files = computed(() => geometry.value.files.map(file => ({ ...file, hunks:
   const window = large.value ? diffWindow(hunk.count, hunk.top, scroll.value, viewportHeight.value) : { start: 0, end: hunk.count, before: 0, after: 0 };
   return { ...hunk, window, visibleLines: hunk.lines.slice(window.start, window.end), visibleRows: hunk.rows.slice(window.start, window.end) };
 }) })));
-const layout = ref('unified');
+const layout = ref('split');
 const selected = ref(new Set<number>());
 const error = ref("");
 watch(
