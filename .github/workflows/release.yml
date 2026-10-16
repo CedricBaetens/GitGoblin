@@ -1,6 +1,8 @@
 name: Release Windows
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       version:
@@ -39,20 +41,11 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - name: Set release version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: node scripts/release-version.mjs
-      - name: Reject an existing tag
+        id: version
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-        shell: pwsh
-        run: |
-          $tags = gh api "repos/$env:GITHUB_REPOSITORY/git/matching-refs/tags/v$env:RELEASE_VERSION" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Could not check existing release tags.' }
-          if ($tags | Where-Object { $_.ref -eq "refs/tags/v$env:RELEASE_VERSION" }) {
-            throw 'This version already has a tag. Choose a new version, or remove the failed draft and its tag before retrying.'
-          }
+        run: node scripts/release-version.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
@@ -62,10 +55,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
-          tagName: v${{ inputs.version }}
-          releaseName: GitGoblin v${{ inputs.version }}
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: GitGoblin v${{ steps.version.outputs.version }}
           releaseCommitish: ${{ github.sha }}
-          releaseDraft: ${{ !inputs.publish }}
+          releaseDraft: ${{ github.event_name == 'push' || !inputs.publish }}
           generateReleaseNotes: true
           uploadUpdaterJson: false
           uploadWorkflowArtifacts: true

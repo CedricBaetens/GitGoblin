@@ -23,6 +23,8 @@ pnpm desktop:build
 
 ## Releases
 
+Every push to `master` runs the Windows release workflow and creates a **draft release** after the checks and installer build succeed. The next version is one patch above the highest stable version in `package.json`, existing GitHub tags, or existing releases (including drafts): `0.1.0` → `0.1.1` → `0.1.2`. A manual `0.2.0` release makes the next automatic version `0.2.1`. Other branches and tag pushes do not trigger releases. Builds run sequentially to avoid duplicate version allocation; GitHub can replace pending runs with newer pushes while a build is active.
+
 Open [Actions → Release Windows](https://github.com/CedricBaetens/GitGoblin/actions/workflows/release.yml), choose **Run workflow**, select `master`, and enter a new version such as `0.2.0`. Leave **Publish immediately** unchecked to create a draft, or check it to publish after a successful build.
 
 The workflow runs the TypeScript and Rust checks, builds the Windows x64 NSIS installer, and attaches it to a GitHub release with generated release notes. Drafts can be reviewed and published from [Releases](https://github.com/CedricBaetens/GitGoblin/releases). Existing version tags are rejected to avoid replacing a released build.
