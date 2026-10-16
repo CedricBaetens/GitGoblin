@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { version as appVersion } from '../package.json';
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import {
   GitBranch,
@@ -923,7 +924,7 @@ watch(amend, async (value) => {
           <span class="status-dot" :class="{ live: t3Connected }" /><span>{{
             t3Connected ? "T3 Code connected" : "Local workspace"
           }}</span
-          ><span class="version">v0.1.0</span>
+          ><span class="version">v{{ appVersion }}</span>
         </div>
       </div>
     </aside>
