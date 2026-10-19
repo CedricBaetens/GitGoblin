@@ -47,3 +47,30 @@ it('does not compare standalone additions and deletions separated by context', (
   const text = '--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n-removed\n unchanged\n+added\n';
   expect(highlightDiff(text)).toEqual({});
 });
+
+it('does not scatter letter highlights across unrelated replacement lines', () => {
+  const before = '    using var connection = jobStorage.GetConnection();';
+  const after = '    var delivery = await databaseContext.GenericInvoiceDeliveries.SingleOrDefaultAsync();';
+  expect(inlineChanges(before, after)).toEqual({ old: [], next: [] });
+});
+
+it('keeps replacement identifiers together instead of matching incidental letters', () => {
+  const before = 'return service.connection.AcquireDistributedLock(key);';
+  const after = 'return service.databaseContext.SingleOrDefaultAsync(key);';
+  const result = inlineChanges(before, after);
+  expect(changed(before, result.old)).toEqual(['connection', 'AcquireDistributedLock']);
+  expect(changed(after, result.next)).toEqual(['databaseContext', 'SingleOrDefaultAsync']);
+});
+
+
+it.each(['file.cs', 'file.unknown'])('leaves unrelated replacements with only line highlighting in %s', path => {
+  const before = '    using var connection = jobStorage.GetConnection();';
+  const after = '    var delivery = await databaseContext.GenericInvoiceDeliveries.SingleOrDefaultAsync();';
+  const text = `--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-${before}\n+${after}\n`;
+  const result = highlightDiff(text);
+  for (const line of parseDiff(text).hunks[0]!.lines) {
+    const tokens = result[line.index]![line.kind === 'delete' ? 'old' : 'next']!;
+    expect(tokens.map(token => token.text).join('')).toBe(line.text.slice(1));
+    expect(tokens.some(token => token.classes.includes('diff-inline-change'))).toBe(false);
+  }
+});
