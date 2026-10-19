@@ -1446,11 +1446,11 @@ small {
   background: #131822;
   border-color: #35405a;
 }
-.modal .force-delete-option {
+.modal .force-option {
   flex-direction: row;
   align-items: center;
 }
-.modal .force-delete-option input {
+.modal .force-option input {
   width: auto;
 }
 .modal-footer {

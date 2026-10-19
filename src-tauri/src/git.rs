@@ -558,7 +558,14 @@ pub fn execute(req: Request) -> Result<Value, String> {
         }
         "fetch" => json!(git(&repo, &["fetch", "--all", "--prune"])?),
         "pull" => json!(git(&repo, &["pull", "--ff-only"])?),
-        "push" => json!(git(&repo, &["push"])?),
+        "push" => {
+            let args = if req.mode == "force" {
+                vec!["push", "--force-with-lease"]
+            } else {
+                vec!["push"]
+            };
+            json!(git(&repo, &args)?)
+        }
         "switch" => {
             branch(&repo, &req.target)?;
             json!(git(&repo, &["switch", &req.target])?)
@@ -864,6 +871,41 @@ mod tests {
             files: Vec::new(),
         }
     }
+    #[test]
+    fn force_push_rewrites_history_but_preserves_unseen_remote_commits() {
+        let dir = fixture();
+        let repo = dir.path();
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "--bare"]).unwrap();
+        git(repo, &["checkout", "-b", "main"]).unwrap();
+        git(repo, &["remote", "add", "origin", remote.path().to_str().unwrap()]).unwrap();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        git(repo, &["push", "-u", "origin", "main"]).unwrap();
+        let push = |mode: &str| {
+            let mut req = request(repo, "push");
+            req.mode = mode.into();
+            execute(req)
+        };
+
+        git(repo, &["commit", "--allow-empty", "-m", "next"]).unwrap();
+        push("").unwrap();
+        assert_eq!(oid(remote.path(), "main").unwrap(), oid(repo, "HEAD").unwrap());
+        git(repo, &["commit", "--amend", "--allow-empty", "-m", "rewritten"]).unwrap();
+        assert!(push("").is_err());
+        push("force").unwrap();
+        let published = oid(repo, "HEAD").unwrap();
+        assert_eq!(oid(remote.path(), "main").unwrap(), published);
+
+        // Advance the remote without updating this repository's tracking ref.
+        let tree = git(repo, &["rev-parse", "HEAD^{tree}"]).unwrap();
+        let unseen = git(repo, &["commit-tree", tree.trim(), "-p", &published, "-m", "someone else's commit"]).unwrap();
+        git(repo, &["push", "origin", &format!("{}:refs/heads/main", unseen.trim())]).unwrap();
+        git(repo, &["update-ref", "refs/remotes/origin/main", &published]).unwrap();
+        git(repo, &["commit", "--amend", "--allow-empty", "-m", "rewritten again"]).unwrap();
+        assert!(push("force").unwrap_err().contains("stale info"));
+        assert_eq!(oid(remote.path(), "main").unwrap(), unseen.trim());
+    }
+
     #[test]
     fn branch_deletion_requires_explicit_force_for_unmerged_commits() {
         let dir = fixture();

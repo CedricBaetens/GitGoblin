@@ -485,7 +485,7 @@ const definitions: Record<
   push: {
     title: "Push branch",
     description:
-      "Publish commits to the configured upstream. This never force-pushes.",
+      "Publish commits to the configured upstream.",
   },
   continue: {
     title: "Continue operation",
@@ -1533,10 +1533,17 @@ watch(amend, async (value) => {
                 :disabled="!!rebaseCommits.length"
                 required
             /></label>
-            <label v-if="dialog === 'branch-delete'" class="force-delete-option">
+            <label v-if="dialog === 'branch-delete'" class="force-option">
               <input v-model="values.mode" type="checkbox" true-value="force" false-value="" :disabled="busy" />
               Force delete even if the branch is not merged
             </label>
+            <label v-if="dialog === 'push'" class="force-option">
+              <input v-model="values.mode" type="checkbox" true-value="force" false-value="" :disabled="busy" />
+              Force push (with lease)
+            </label>
+            <p v-if="dialog === 'push' && values.mode === 'force'" class="nav-hint">
+              Replaces remote history. Refused if the remote branch changed since your last fetch.
+            </p>
             <div v-if="rebaseCommits.length" class="rebase-list">
               <div v-for="(commit, i) in rebaseCommits" :key="commit.id">
                 <select
@@ -1577,7 +1584,7 @@ watch(amend, async (value) => {
                 type="submit"
                 class="primary"
                 :class="{
-                  danger: dialog === 'discard-files' || dialog === 'branch-delete' || dialog === 'reset' && values.mode === 'hard',
+                  danger: dialog === 'discard-files' || dialog === 'branch-delete' || dialog === 'push' && values.mode === 'force' || dialog === 'reset' && values.mode === 'hard',
                 }"
                 :disabled="busy || example"
               >
@@ -1588,7 +1595,7 @@ watch(amend, async (value) => {
                       ? "Load commits"
                       : activeAgents.length
                         ? "Proceed while agents are active"
-                        : dialogTitle
+                        : dialog === 'push' && values.mode === 'force' ? 'Force push' : dialogTitle
                 }}
               </button>
             </div>
