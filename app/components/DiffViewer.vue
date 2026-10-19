@@ -136,6 +136,27 @@ const files = computed(() => geometry.value.files.map(file => ({ ...file, hunks:
   const window = large.value ? diffWindow(hunk.count, hunk.top, scroll.value, viewportHeight.value) : { start: 0, end: hunk.count, before: 0, after: 0 };
   return { ...hunk, window, visibleLines: hunk.lines.slice(window.start, window.end), visibleRows: hunk.rows.slice(window.start, window.end) };
 }) })));
+let jumpToChangePending = false;
+watch(
+  () => [props.path, props.mode, props.wholeFile, props.text, props.loading] as const,
+  async (current, previous) => {
+    if (!previous || current.slice(0, 3).some((value, i) => value !== previous[i]))
+      jumpToChangePending = !!props.wholeFile;
+    if (!jumpToChangePending || props.loading || !props.text) return;
+    await nextTick();
+    const el = scroller.value;
+    if (!jumpToChangePending || !props.wholeFile || props.loading || !el) return;
+    jumpToChangePending = false;
+    // Virtualized changes may be outside the DOM; wrapped rows need measured positions.
+    const row = el.querySelector<HTMLElement>('.diff-line.add, .diff-line.delete');
+    const offset = large.value ? geometry.value.changes[0]?.offset
+      : row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop : undefined;
+    if (offset === undefined) return;
+    el.scrollTop = Math.max(0, offset - el.clientHeight / 3);
+    onScroll();
+  },
+  { immediate: true, flush: 'post' },
+);
 const selected = ref(new Set<number>());
 const error = ref("");
 watch(
