@@ -1527,6 +1527,9 @@ small {
     font-size: 13px;
   }
 }
+@media (max-width: 1400px) {
+  .toolbar-actions > button > span { display: none; }
+}
 @media (max-width: 1250px) {
   :root {
     --sidebar: 205px;
@@ -1534,9 +1537,6 @@ small {
   }
   .review-grid {
     grid-template-columns: 205px minmax(0, 1fr);
-  }
-  .toolbar-actions > button > span {
-    display: none;
   }
   .changes-title {
     padding: 10px 16px;

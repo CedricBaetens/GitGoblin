@@ -437,7 +437,7 @@ export class T3Client {
       const threadId = crypto.randomUUID();
       return this.dispatch({
         type: "thread.create", commandId: crypto.randomUUID(), threadId, projectId,
-        title, modelSelection, runtimeMode: "approval-required", interactionMode: "default",
+        title, modelSelection, runtimeMode: "full-access", interactionMode: "default",
         branch: null, worktreePath: worktreePath || null, createdAt: new Date().toISOString(),
       }).then(() => {
         if (title === "New conversation") this.untitledThreads.add(threadId);
@@ -450,7 +450,7 @@ export class T3Client {
       projectId,
       title,
       modelSelection,
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
       interactionMode: "default",
       workspaceStrategy: worktreePath
         ? { type: "existing_worktree", worktreePath }

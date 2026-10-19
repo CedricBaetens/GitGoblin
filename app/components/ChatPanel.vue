@@ -205,18 +205,18 @@ async function openCreatedConversation(id: string, text: string, path: string) {
   await nextTick();
   composer.value?.focus();
 }
-async function commitStaged(repo: string, instruction: string) {
-  if (!connected.value) throw new Error("Connect T3 Code for automatic commits, or choose a manual commit message.");
+async function runInstruction(repo: string, instruction: string) {
+  if (!connected.value) throw new Error("Connect T3 Code to run this action.");
   let target = repositoryThreads(thread.value ? [thread.value] : [], projects.value, repo)[0];
   const existing = !!target;
   if (!target) {
     const defaults = conversationDefaults(repo, projects.value, thread.value);
     const modelSelection = defaults.modelSelection || (modelOptions.value[0] ? JSON.parse(modelOptions.value[0].value) : undefined);
-    if (!defaults.projectId || !modelSelection) throw new Error("Configure a T3 conversation for this worktree before committing automatically.");
+    if (!defaults.projectId || !modelSelection) throw new Error("Configure a T3 conversation for this worktree before running this action.");
     const { threadId } = await client.createThread(defaults.projectId, "New conversation", modelSelection, repo);
     await openCreatedConversation(threadId, instruction, repo);
     target = { id: threadId, projectId: defaults.projectId, title: "New conversation", modelSelection,
-      worktreePath: repo, branch: null, status: "idle", activeRunId: null, runtimeMode: "approval-required", interactionMode: "default" };
+      worktreePath: repo, branch: null, status: "idle", activeRunId: null, runtimeMode: "full-access", interactionMode: "default" };
   }
   sending.value = true;
   try {
@@ -233,6 +233,7 @@ async function create(preset: (typeof conversationPresets)[number]) {
   if (!canCreate.value) return;
   creating.value = true;
   newChatError.value = "";
+  error.value = "";
   let createdWorktree = false;
   try {
     if (useNewWorktree.value) {
@@ -243,16 +244,32 @@ async function create(preset: (typeof conversationPresets)[number]) {
       useNewWorktree.value = false;
       createdWorktree = true;
     }
+    const projectId = newProject.value;
+    const modelSelection = JSON.parse(newModel.value);
+    const worktreePath = newWorktree.value.trim();
+    const instruction = conversationPrompt(preset, newTicket.value);
     const result = await client.createThread(
-      newProject.value,
+      projectId,
       "New conversation",
-      JSON.parse(newModel.value),
-      newWorktree.value.trim(),
+      modelSelection,
+      worktreePath,
     );
     showNew.value = false;
-    await openCreatedConversation(result.threadId, conversationPrompt(preset, newTicket.value), newWorktree.value.trim());
+    await openCreatedConversation(result.threadId, instruction, worktreePath);
+    if (instruction.trim()) {
+      sending.value = true;
+      try {
+        await client.sendMessage({ id: result.threadId, projectId, title: "New conversation", modelSelection,
+          worktreePath, branch: null, status: "idle", activeRunId: null, runtimeMode: "full-access", interactionMode: "default" }, instruction);
+        drafts.delete(result.threadId);
+        if (selectedId.value === result.threadId && prompt.value === instruction) prompt.value = "";
+      } finally {
+        sending.value = false;
+      }
+    }
   } catch (e) {
-    newChatError.value = createdWorktree
+    if (!showNew.value) error.value = `Conversation created, but the message could not be sent. ${String(e)}`;
+    else newChatError.value = createdWorktree
       ? `Worktree created at ${newWorktree.value}. Conversation creation failed: ${String(e)} Retry to use this worktree.`
       : String(e);
   } finally {
@@ -331,7 +348,7 @@ onUnmounted(() => {
 defineExpose({
   select,
   newConversation: newChat,
-  commitStaged,
+  runInstruction,
   focusComposer: () => composer.value?.focus(),
   stopAll: async () => {
     for (const t of matchingThreads.value.filter((t) => t.activeRunId))
@@ -583,7 +600,7 @@ defineExpose({
             <h2 id="new-conversation-title">New conversation</h2>
             <button type="button" class="icon-button" aria-label="Close new conversation" :disabled="creating" @click="dismissNewDialog"><X :size="18" /></button>
           </div>
-          <p id="new-conversation-description">Choose an action. You can edit the instruction before sending it.</p>
+          <p id="new-conversation-description">Choose an action to start when you create the conversation. Blank opens an empty chat.</p>
           <div class="conversation-actions" role="group" aria-label="Conversation action">
             <button v-for="(preset, index) in conversationPresets" :key="preset.label" type="button" class="conversation-preset"
               :aria-label="preset.label" :aria-pressed="newPreset.label === preset.label" :disabled="creating" @click="newPreset = preset">

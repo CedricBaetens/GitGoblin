@@ -249,8 +249,9 @@ async function fileLocation(action: 'open_editor' | 'reveal_path' | 'full_path',
 watch([repo, busy, example], () => sidebarMenu.value?.close());
 const chatVisible = ref(false),
   context = ref(""),
-  chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; commitStaged: (repo: string, instruction: string) => Promise<void>; stopAll: () => Promise<void>; focusComposer: () => void }>(),
+  chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; runInstruction: (repo: string, instruction: string) => Promise<void>; stopAll: () => Promise<void>; focusComposer: () => void }>(),
   committing = ref(false),
+  requestingPr = ref(false),
   commitOptionsMenu = ref<HTMLDivElement>(),
   menu = ref(false);
 async function openNewConversation(event: MouseEvent) {
@@ -625,7 +626,7 @@ async function patch(text: string) {
   } catch {}
 }
 async function commit(confirmed = false) {
-  if (busy.value || committing.value || example.value || !staged.value.length) return false;
+  if (busy.value || committing.value || requestingPr.value || example.value || !staged.value.length) return false;
   if (activeAgents.value.length && !confirmed) { ask('auto-commit'); return false; }
   committing.value = true;
   error.value = '';
@@ -637,7 +638,7 @@ async function commit(confirmed = false) {
     chatVisible.value = true;
     await nextTick();
     if (!chat.value) throw new Error('The conversation panel is unavailable.');
-    await chat.value.commitStaged(root, commitInstruction(root, context));
+    await chat.value.runInstruction(root, commitInstruction(root, context));
     notice.value = 'Commit task started. Follow its progress in the conversation.';
     return true;
   } catch (e) {
@@ -646,6 +647,20 @@ async function commit(confirmed = false) {
   } finally {
     committing.value = false;
   }
+}
+async function pullRequest() {
+  if (busy.value || committing.value || requestingPr.value || example.value) return;
+  requestingPr.value = true;
+  error.value = '';
+  const root = repo.value;
+  try {
+    chatVisible.value = true;
+    await nextTick();
+    if (!chat.value) throw new Error('The conversation panel is unavailable.');
+    await chat.value.runInstruction(root, '/pr\n\nCreate or update a pull request for the current branch using this conversation’s context.');
+    notice.value = 'Pull request task started. Follow its progress in the conversation.';
+  } catch (e) { error.value = String(e); }
+  finally { requestingPr.value = false; }
 }
 async function manualCommit(amending = false) {
   commitOptionsMenu.value?.hidePopover();
@@ -846,20 +861,24 @@ onUnmounted(() => {
         </div>
         <p v-if="!recent.length && !favorites.length" class="nav-hint">Opened repositories will appear here.</p>
       </div>
-      <button v-if="snapshot" class="new-conversation-action secondary" aria-haspopup="dialog" :disabled="example || busy || committing" @click="openNewConversation" data-tauri-drag-region="false">
+      <button v-if="snapshot" class="new-conversation-action secondary" aria-haspopup="dialog" :disabled="example || busy || committing || requestingPr" @click="openNewConversation" data-tauri-drag-region="false">
         <MessageSquare :size="15" />New conversation
       </button>
           <div v-if="snapshot" class="toolbar-actions" aria-label="Git actions">
             <div class="commit-actions" data-tauri-drag-region="false">
-              <button class="primary" :disabled="busy || committing || example || !staged.length || !t3Connected"
+              <button class="primary" :disabled="busy || committing || requestingPr || example || !staged.length || !t3Connected"
                 :title="t3Connected ? 'Generate a message and commit staged changes' : 'Connect T3 Code for automatic commits; manual messages are in Commit options'"
                 @click="commit()"><GitCommitHorizontal :size="15" />{{ committing ? 'Starting…' : 'Commit' }}<small v-if="staged.length">{{ staged.length }}</small></button>
-              <button aria-label="Commit options" aria-haspopup="true" :disabled="busy || committing || example" @click="toggleTopMenu(commitOptionsMenu, $event)"><ChevronDown :size="13" /></button>
+              <button aria-label="Commit options" aria-haspopup="true" :disabled="busy || committing || requestingPr || example" @click="toggleTopMenu(commitOptionsMenu, $event)"><ChevronDown :size="13" /></button>
             </div>
             <div id="commit-menu" ref="commitOptionsMenu" popover class="commit-menu" data-tauri-drag-region="false" aria-label="Commit options">
               <button :disabled="!staged.length" @click="manualCommit()">Write commit message…</button>
               <button :disabled="!snapshot.head" @click="manualCommit(true)">Amend last commit…</button>
             </div>
+            <button class="pull-request-action secondary" :disabled="busy || committing || requestingPr || example || !t3Connected"
+              title="Create or update a pull request with the pr skill" @click="pullRequest">
+              <GitPullRequest :size="15" />{{ requestingPr ? 'Starting…' : 'Pull request' }}
+            </button>
             <button
               title="Fetch remote changes"
               :disabled="busy || example"
