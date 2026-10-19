@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, watch } from "vue";
 import { ChevronRight, ChevronDown, Folder, FileCode2 } from "lucide-vue-next";
-import { fileTree, type FileNode } from "~/lib/files";
+import { fileChange, fileTree, type FileNode } from "~/lib/files";
 import type { FileStatus } from "~/lib/types";
 import { selectFiles } from '~/lib/file-selection';
 
@@ -99,14 +99,13 @@ function toggle(path: string) {
 <template>
   <div v-if="picked.size > 1" class="selection-actions"><span>{{ picked.size }} selected</span><button v-if="mode !== 'branch'" :disabled="!canStageSelection" @click="$emit('toggleSelection', selectedPaths)">{{ mode === 'staged' ? 'Unstage selected' : 'Stage selected' }}</button></div>
   <ul class="compact-files">
-    <li v-for="row in rows" :key="row.path" class="file-entry">
+    <li v-for="row in rows" :key="row.path" class="file-entry" @contextmenu="openMenu($event, row)">
       <button class="compact-file-row" :class="{ active: row.file && picked.has(row.path), folder: !row.file }"
         :style="{ paddingLeft: `${8 + row.depth * 14}px` }" :title="row.path"
         :aria-expanded="row.file ? undefined : !collapsed.has(row.path)"
         :aria-current="row.file && selected === row.path ? 'true' : undefined"
         :aria-pressed="row.file ? picked.has(row.path) : undefined"
         aria-haspopup="menu"
-        @contextmenu="openMenu($event, row)"
         @keydown.shift.f10.prevent="openMenu($event, row)"
         @keydown.context-menu.prevent="openMenu($event, row)"
         @click="row.file ? selectFile($event, row.path) : toggle(row.path)"
@@ -117,17 +116,15 @@ function toggle(path: string) {
         <template v-else><span v-if="tree" class="tree-chevron-space" aria-hidden="true" /><FileCode2 :size="13" /></template>
         <span class="compact-file-name">{{ row.name }}</span>
         <small v-if="!tree && row.path.includes('/')">{{ row.path.slice(0, row.path.lastIndexOf('/')) }}</small>
-        <span v-if="row.file" class="file-status" :class="{ added: row.file.worktree === '?' || row.file.index === 'A', conflicted: row.file.conflict }">{{
-          row.file.conflict ? '!' : row.file.worktree === '?' ? 'U' : mode === 'staged' ? row.file.index : row.file.worktree === ' ' ? 'M' : row.file.worktree
-        }}</span>
+        <span v-if="row.file" class="file-status" :class="fileChange(row.file, mode).kind">{{ fileChange(row.file, mode).label }}</span>
       </button>
       <button v-if="!row.file && mode !== 'branch'" class="folder-stage" :disabled="!editable" :aria-label="`${mode === 'staged' ? 'Unstage' : 'Stage'} folder ${row.path}`" @click="$emit('toggleFolder', row.path)">{{ mode === 'staged' ? 'Unstage' : 'Stage' }}</button>
     </li>
   </ul>
   <div ref="menu" popover="auto" role="menu" :aria-label="`Actions for ${menuRow?.path || 'file'}`" class="file-context-menu" @keydown="menuKey" @contextmenu.prevent>
     <template v-if="menuRow">
-      <button v-if="menuRow.file" role="menuitem" @click="menuAction('view')">View changes</button>
       <button v-if="mode !== 'branch'" role="menuitem" :disabled="!canStage" @click="menuAction('stage')">{{ mode === 'staged' ? 'Unstage' : 'Stage' }} {{ menuRow.file ? picked.size > 1 ? `${picked.size} selected files` : 'file' : 'folder' }}</button>
+      <button v-if="menuRow.file" role="menuitem" @click="menuAction('view')">View changes</button>
       <button v-if="!menuRow.file" role="menuitem" @click="menuAction('toggle')">{{ collapsed.has(menuRow.path) ? 'Expand' : 'Collapse' }} folder</button>
       <button role="menuitem" @click="menuAction('copy')">Copy relative path</button>
       <span v-if="menuError" role="alert">{{ menuError }}</span>
@@ -154,5 +151,10 @@ function toggle(path: string) {
 .compact-file-row.folder { color: #a5aebf; }
 .compact-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 9px; color: #717b91; }
-.file-status { margin-left: auto; flex-shrink: 0; }
+.file-status { margin-left: auto; flex-shrink: 0; padding: 2px 5px; border-radius: 4px; font-family: inherit; font-size: 9px; font-weight: 600; line-height: 14px; }
+.file-status.added { color: #a0e7ba; background: #23834b35; }
+.file-status.removed { color: #ffafb8; background: #c7435135; }
+.file-status.modified { color: #edcc8e; background: #b4862530; }
+.file-status.renamed { color: #b5c8ff; background: #6a85ce30; }
+.file-status.conflicted { color: #ffafb8; background: #c7435145; }
 </style>

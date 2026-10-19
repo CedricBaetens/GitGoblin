@@ -1,5 +1,6 @@
 import { common, createLowlight } from 'lowlight';
-import { parseDiffFiles } from './diff';
+import { parseDiffFiles, splitDiffLines } from './diff';
+import { inlineChanges, type ChangeRange } from './inline-changes';
 
 const highlighter = createLowlight(common);
 export interface SyntaxToken { text: string; classes: string }
@@ -41,19 +42,45 @@ function codeLines(code: string, language: string): SyntaxToken[][] {
   return lines;
 }
 
+function markChanges(tokens: SyntaxToken[], ranges: ChangeRange[]): SyntaxToken[] {
+  const result: SyntaxToken[] = [];
+  let offset = 0, rangeIndex = 0;
+  for (const token of tokens) {
+    const end = offset + token.text.length;
+    let start = offset;
+    while (start < end) {
+      while (ranges[rangeIndex] && ranges[rangeIndex]!.end <= start) rangeIndex++;
+      const range = ranges[rangeIndex];
+      const changed = range && range.start <= start;
+      const boundary = Math.min(end, range ? changed ? range.end : range.start : end);
+      result.push({ text: token.text.slice(start - offset, boundary - offset), classes: changed ? `${token.classes} diff-inline-change`.trim() : token.classes });
+      start = boundary;
+    }
+    offset = end;
+  }
+  return result;
+}
+
 export function highlightDiff(text: string, path = ''): DiffSyntax {
   const result: DiffSyntax = {};
   // Bound token/DOM growth for generated or huge files; plain diffs remain available.
   if (text.length > 300_000) return result;
   for (const file of parseDiffFiles(text)) {
     const language = diffLanguage(file.header, path);
-    if (!language) continue;
     for (const hunk of file.hunks) {
-      for (const side of ['old', 'next'] as const) {
+      if (language) for (const side of ['old', 'next'] as const) {
         const lines = hunk.lines.filter((line) => line.kind !== 'meta' && line.kind !== (side === 'old' ? 'add' : 'delete'));
         if (!lines.length) continue;
         const tokens = codeLines(lines.map((line) => line.text.slice(1)).join('\n'), language);
         lines.forEach((line, index) => { (result[line.index] ||= {})[side] = tokens[index] || []; });
+      }
+      for (const row of splitDiffLines(hunk.lines)) {
+        if (row.left?.kind !== 'delete' || row.right?.kind !== 'add') continue;
+        const changes = inlineChanges(row.left.text.slice(1), row.right.text.slice(1));
+        for (const [line, side] of [[row.left, 'old'], [row.right, 'next']] as const) {
+          const entry = result[line.index] ||= {};
+          entry[side] = markChanges(entry[side] || [{ text: line.text.slice(1), classes: '' }], changes[side]);
+        }
       }
     }
   }

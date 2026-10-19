@@ -272,7 +272,18 @@ export function useWorkbench() {
     view.value = "changes";
     error.value = "";
   }
-  async function runMutation(operation: () => Promise<string>) {
+  async function refreshFiles() {
+    try {
+      const files = await read<FileStatus[]>('status');
+      if (snapshot.value) snapshot.value = { ...snapshot.value, files };
+      if (!currentFiles.value.some(file => file.path === selected.value))
+        selected.value = currentFiles.value[0]?.path || '';
+      void loadDiff(true);
+    } catch (e) {
+      error.value = `Could not refresh changed files: ${e}`;
+    }
+  }
+  async function runMutation(operation: () => Promise<string>, indexOnly = false) {
     if (example.value)
       throw new Error(
         "This is an example workspace. Open a real repository in the desktop app to make changes.",
@@ -280,6 +291,7 @@ export function useWorkbench() {
     if (busy.value)
       throw new Error("Wait for the current Git operation to finish.");
     busy.value = true;
+    generation++;
     diffGeneration++;
     diffCache.clear();
     warmupGeneration++;
@@ -293,22 +305,25 @@ export function useWorkbench() {
       error.value = String(e);
       throw e;
     } finally {
+      if (indexOnly) await refreshFiles();
       busy.value = false;
-      await refresh(true);
+      if (indexOnly) void warmDiffs();
+      else await refresh(true);
     }
   }
   async function mutate(action: string, extra: Partial<GitRequest> = {}) {
-    return runMutation(() => read<string>(action, extra));
+    return runMutation(() => read<string>(action, extra), ['stage', 'unstage', 'patch'].includes(action));
   }
   async function stageFiles(paths: string[], fileMode: string) {
     if (!paths.length || !['working', 'staged'].includes(fileMode)) return;
     const action = fileMode === 'staged' ? 'unstage' : 'stage';
+    const reviewed = new Map(paths.map(path => [path, diffCache.get(JSON.stringify([repo.value, fileMode, base.value, path, wholeFile.value]))]));
     return runMutation(async () => {
       let completed = 0;
       try {
         for (const path of paths) {
           notice.value = `${action === 'stage' ? 'Staging' : 'Unstaging'} ${completed + 1} of ${paths.length} files`;
-          const current = await read<Diff>('diff', { path, mode: fileMode });
+          const current = reviewed.get(path) || await read<Diff>('diff', { path, mode: fileMode });
           await read<string>(action, { path, fingerprint: current.fingerprint });
           completed++;
         }
@@ -316,7 +331,7 @@ export function useWorkbench() {
         throw new Error(`${completed} of ${paths.length} files ${action === 'stage' ? 'staged' : 'unstaged'}. ${e}`);
       }
       return `${completed} files ${action === 'stage' ? 'staged' : 'unstaged'}`;
-    });
+    }, true);
   }
   async function selectCommit(commit: Commit) {
     selectedCommit.value = commit;

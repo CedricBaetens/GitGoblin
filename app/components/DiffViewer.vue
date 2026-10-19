@@ -281,6 +281,8 @@ function context() {
 .hljs-type, .hljs-built_in, .hljs-name { color: #81cbd1; }
 .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-selector-class { color: #9bc8ef; }
 .hljs-meta, .hljs-doctag { color: #a8b6ec; }
+.diff-line.delete .diff-inline-change { color: #fff0f2; background: #b83e53; border-radius: 2px; box-shadow: inset 0 -1px #ff8c9d; }
+.diff-line.add .diff-inline-change { color: #ecfff1; background: #237443; border-radius: 2px; box-shadow: inset 0 -1px #79dfa0; }
 .diff-loading { visibility: hidden; flex-shrink: 0; }
 .diff-loading.visible { visibility: visible; }
 .diff-layout { display: flex; flex-shrink: 0; border: 1px solid var(--line); border-radius: 5px; padding: 2px; }

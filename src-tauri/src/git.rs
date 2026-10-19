@@ -252,7 +252,7 @@ fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<u
 }
 
 pub fn is_read_only(action: &str) -> bool {
-    matches!(action, "snapshot" | "history" | "diff" | "branch-files" | "commit-diff"
+    matches!(action, "snapshot" | "status" | "history" | "diff" | "branch-files" | "commit-diff"
         | "commit-message" | "reflog" | "blame" | "conflict" | "rebase-plan")
 }
 
@@ -273,6 +273,7 @@ pub fn main_repository(path: &str) -> Result<String, String> {
 pub fn execute(req: Request) -> Result<Value, String> {
     let repo = root(&req.repo)?;
     let value = match req.action.as_str() {
+        "status" => json!(status(&repo)?),
         "snapshot" => {
             let files = status(&repo)?;
             let refs = git(
@@ -985,6 +986,27 @@ mod tests {
         assert!(execute(req).unwrap_err().contains("changed"));
         assert!(git(dir.path(), &["diff", "--cached"]).unwrap().is_empty());
     }
+    #[test]
+    fn lightweight_status_matches_snapshot_after_staging_and_unstaging() {
+        let dir = fixture();
+        fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+        for action in ["stage", "unstage"] {
+            let mut req = request(dir.path(), action);
+            req.path = "file.txt".into();
+            req.fingerprint = fingerprint(dir.path(), "file.txt").unwrap();
+            execute(req).unwrap();
+            let start = std::time::Instant::now();
+            let files = execute(request(dir.path(), "status")).unwrap();
+            let status_elapsed = start.elapsed();
+            let start = std::time::Instant::now();
+            let snapshot = execute(request(dir.path(), "snapshot")).unwrap();
+            println!("After {action}: status {:?}, full snapshot {:?}", status_elapsed, start.elapsed());
+            assert_eq!(files, snapshot["files"]);
+            assert_eq!(files[0]["index"], if action == "stage" { "A" } else { "?" });
+        }
+        assert!(is_read_only("status"));
+    }
+
     #[test]
     fn stage_commit_unstage_and_history() {
         let dir = fixture();

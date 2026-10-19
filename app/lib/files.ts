@@ -1,5 +1,19 @@
 import type { FileStatus } from "./types";
 
+export function fileChange(file: FileStatus, mode: string) {
+  if (file.conflict) return { label: 'Conflict', kind: 'conflicted' };
+  const status = mode === 'staged' ? file.index : file.worktree;
+  switch (status) {
+    case '?':
+    case 'A': return { label: 'Added', kind: 'added' };
+    case 'D': return { label: 'Removed', kind: 'removed' };
+    case 'R': return { label: 'Renamed', kind: 'renamed' };
+    case 'C': return { label: 'Copied', kind: 'added' };
+    case 'T': return { label: 'Type changed', kind: 'modified' };
+    default: return { label: 'Modified', kind: 'modified' };
+  }
+}
+
 export interface FileNode {
   name: string;
   path: string;
