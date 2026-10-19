@@ -27,12 +27,13 @@ export function nextReleaseVersion(base, tags) {
 
 export function setReleaseVersion(root, version) {
   validateVersion(version);
-  const files = ['package.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'];
+  const files = ['package.json', 'package-lock.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'];
   const contents = files.map(file => {
     const source = readFileSync(resolve(root, file), 'utf8');
     if (file.endsWith('.json')) {
       const value = JSON.parse(source);
       value.version = version;
+      if (file === 'package-lock.json') value.packages[''].version = version;
       return JSON.stringify(value, null, 2) + '\n';
     }
     const pattern = file.endsWith('.lock')

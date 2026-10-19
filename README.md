@@ -4,21 +4,21 @@ A Windows-first Git desktop application with Fork-inspired workflows, a restrain
 
 ## Development
 
-Requires Node 22+, pnpm, Git, Rust stable, and (Windows) Visual Studio C++ build tools with a Windows SDK and WebView2.
+Requires Node 22+, npm, Git, Rust stable, and (Windows) Visual Studio C++ build tools with a Windows SDK and WebView2.
 
 ```sh
-pnpm install
-pnpm desktop
+npm install
+npm run desktop
 ```
 
-`pnpm dev` opens the UI in a browser; native filesystem and Git commands require the desktop app. The browser offers an explicitly labeled example workspace for UI review.
+`npm run dev` opens the UI in a browser; native filesystem and Git commands require the desktop app. The browser offers an explicitly labeled example workspace for UI review.
 
 ```sh
-pnpm typecheck
-pnpm test
-pnpm native:test
-pnpm native:smoke # after building a debug desktop binary
-pnpm desktop:build
+npm run typecheck
+npm run test
+npm run native:test
+npm run native:smoke # after building a debug desktop binary
+npm run desktop:build
 ```
 
 ## Releases

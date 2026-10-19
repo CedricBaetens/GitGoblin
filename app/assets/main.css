@@ -749,30 +749,30 @@ small {
   opacity: 1;
 }
 .diff-line.add {
-  background: #1d34282b;
+  background: #23834b40;
 }
 .diff-line.add code {
-  color: #a3c9b4;
+  color: #c0f0ce;
 }
 .diff-line.add .line-sign {
-  color: #79b797;
+  color: #87e5a6;
 }
 .diff-line.add .line-number {
-  background: #25403230;
-  color: #5f8b72;
+  background: #23834b50;
+  color: #9cdbaf;
 }
 .diff-line.delete {
-  background: #42232940;
+  background: #c7435140;
 }
 .diff-line.delete code {
-  color: #cfa1aa;
+  color: #ffd0d5;
 }
 .diff-line.delete .line-sign {
-  color: #c5818d;
+  color: #ff98a3;
 }
 .diff-line.delete .line-number {
-  background: #4f293330;
-  color: #94616d;
+  background: #c7435150;
+  color: #f1a6af;
 }
 .diff-line.selected {
   background: #364c7655;
