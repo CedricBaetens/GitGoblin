@@ -2,15 +2,7 @@ import { expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { nextReleaseVersion, setReleaseVersion } from '../scripts/release-version.mjs';
-
-it('increments the highest stable version across source, tags and draft releases', () => {
-  expect(nextReleaseVersion('0.1.0', [])).toBe('0.1.1');
-  expect(nextReleaseVersion('0.1.0', ['v0.1.9', 'v0.1.10', 'v0.1.8'])).toBe('0.1.11');
-  expect(nextReleaseVersion('0.1.0', ['v0.2.0', 'v0.1.99', 'v0.2.1'])).toBe('0.2.2');
-  expect(nextReleaseVersion('1.0.0', ['v0.9.99', 'unrelated', 'v2.0.0-beta'])).toBe('1.0.1');
-  expect(() => nextReleaseVersion('1.0.65535', [])).toThrow();
-});
+import { setReleaseVersion } from '../scripts/release-version.mjs';
 
 it('stamps all app versions without changing dependency versions or accepting invalid releases', () => {
   const root = mkdtempSync(join(tmpdir(), 'gitgoblin-version-'));

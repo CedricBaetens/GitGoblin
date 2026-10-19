@@ -1,13 +1,12 @@
 name: Release Windows
 
 on:
-  push:
-    branches: [master]
   workflow_dispatch:
     inputs:
       version:
         description: 'Version (for example 0.2.0)'
         required: true
+        default: '0.1.0'
         type: string
       publish:
         description: 'Publish immediately (otherwise create a draft release)'
@@ -55,7 +54,7 @@ jobs:
           tagName: v${{ steps.version.outputs.version }}
           releaseName: GitGoblin v${{ steps.version.outputs.version }}
           releaseCommitish: ${{ github.sha }}
-          releaseDraft: ${{ github.event_name == 'push' || !inputs.publish }}
+          releaseDraft: ${{ !inputs.publish }}
           generateReleaseNotes: true
           uploadUpdaterJson: false
           uploadWorkflowArtifacts: true
