@@ -46,6 +46,7 @@ import { useWorkbench } from "~/composables/useWorkbench";
 import { branchTree } from "~/lib/branches";
 import { visibleThreads } from "~/lib/threads";
 import { desktop, invoke } from "~/lib/native";
+import { clampSidebarWidth, defaultSidebarWidth, maxSidebarWidth, minSidebarWidth, sidebarKeyboardWidth } from '~/lib/sidebar';
 import type { Commit, T3Thread, T3Project, GitRequest, GitRef } from "~/lib/types";
 const w = useWorkbench();
 const {
@@ -75,6 +76,54 @@ const {
   reflog,
 } = w;
 const filesAsTree = ref(true);
+const preferredSidebarWidth = ref(defaultSidebarWidth);
+const sidebarViewport = ref(1280), sidebarChatWidth = ref(350);
+const resizingSidebar = ref(false);
+const sidebarRoom = computed(() => sidebarViewport.value - (chatVisible.value && sidebarViewport.value > 1100 ? sidebarChatWidth.value : 0));
+const sidebarWidth = computed(() => clampSidebarWidth(preferredSidebarWidth.value, sidebarRoom.value));
+let sidebarPointer: number | undefined, sidebarStartX = 0, sidebarStartWidth = 0;
+function updateSidebarViewport() {
+  sidebarViewport.value = window.innerWidth;
+  sidebarChatWidth.value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--chat')) || 350;
+}
+function saveSidebarWidth() {
+  try { localStorage.setItem('gitgoblin.sidebarWidth', String(preferredSidebarWidth.value)); } catch { /* Resizing remains available without storage. */ }
+}
+function startSidebarResize(event: PointerEvent) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  sidebarPointer = event.pointerId;
+  sidebarStartX = event.clientX;
+  sidebarStartWidth = sidebarWidth.value;
+  resizingSidebar.value = true;
+  const handle = event.currentTarget as HTMLElement;
+  handle.focus({ preventScroll: true });
+  handle.setPointerCapture(event.pointerId);
+}
+function moveSidebarResize(event: PointerEvent) {
+  if (event.pointerId === sidebarPointer)
+    preferredSidebarWidth.value = clampSidebarWidth(sidebarStartWidth + event.clientX - sidebarStartX, sidebarRoom.value);
+}
+function stopSidebarResize(event: PointerEvent) {
+  if (event.pointerId !== sidebarPointer) return;
+  sidebarPointer = undefined;
+  resizingSidebar.value = false;
+  saveSidebarWidth();
+  const handle = event.currentTarget as HTMLElement;
+  if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+}
+function sidebarResizeKey(event: KeyboardEvent) {
+  const width = sidebarKeyboardWidth(event.key, sidebarWidth.value, sidebarRoom.value, event.shiftKey);
+  if (width === undefined) return;
+  event.preventDefault();
+  event.stopPropagation();
+  preferredSidebarWidth.value = width;
+  saveSidebarWidth();
+}
+function resetSidebarWidth() {
+  preferredSidebarWidth.value = defaultSidebarWidth;
+  saveSidebarWidth();
+}
 const repositoryMenu = ref<HTMLDivElement>();
 const renamePath = ref(''), renameName = ref('');
 const renameInput = ref<HTMLInputElement>();
@@ -659,10 +708,17 @@ const preventBrowserMenu = (event: Event) => event.preventDefault();
 onMounted(() => {
   window.addEventListener("keydown", keydown);
   document.addEventListener('contextmenu', preventBrowserMenu, true);
+  window.addEventListener('resize', updateSidebarViewport);
+  updateSidebarViewport();
+  try {
+    const saved = localStorage.getItem('gitgoblin.sidebarWidth');
+    if (saved !== null) preferredSidebarWidth.value = clampSidebarWidth(Number(saved), Number.POSITIVE_INFINITY);
+  } catch { /* Use the default width when storage is unavailable. */ }
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", keydown);
   document.removeEventListener('contextmenu', preventBrowserMenu, true);
+  window.removeEventListener('resize', updateSidebarViewport);
 });
 watch(amend, async (value) => {
   if (value && !commitMessage.value && snapshot.value?.head) {
@@ -677,7 +733,7 @@ watch(amend, async (value) => {
 });
 </script>
 <template>
-  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot }">
+  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot, 'resizing-sidebar': resizingSidebar }" :style="{ '--sidebar': `${sidebarWidth}px` }">
     <header class="titlebar" data-tauri-drag-region="deep">
       <div class="brand">
         <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -784,7 +840,11 @@ watch(amend, async (value) => {
       </button>
       <WindowControls v-if="desktop()" @error="error = $event" />
     </header>
-    <aside class="sidebar">
+    <aside id="repository-sidebar" class="sidebar">
+      <div class="sidebar-resize" role="separator" tabindex="0" aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="repository-sidebar"
+        :aria-valuenow="sidebarWidth" :aria-valuemin="minSidebarWidth" :aria-valuemax="maxSidebarWidth(sidebarRoom)"
+        title="Drag to resize; double-click to reset. Arrow keys also resize."
+        @pointerdown="startSidebarResize" @pointermove="moveSidebarResize" @pointerup="stopSidebarResize" @pointercancel="stopSidebarResize" @lostpointercapture="stopSidebarResize" @keydown="sidebarResizeKey" @dblclick="resetSidebarWidth" />
       <div class="repository-picker">
         <FolderGit2 :size="19" />
         <div>
@@ -806,6 +866,7 @@ watch(amend, async (value) => {
           <nav class="main-nav">
             <button
               :class="{ active: view === 'changes' }"
+              :aria-current="view === 'changes' ? 'page' : undefined"
               @click="view = 'changes'"
             >
               <Layers :size="16" />Local changes<span class="count">{{
@@ -813,11 +874,13 @@ watch(amend, async (value) => {
               }}</span></button
             ><button
               :class="{ active: view === 'history' }"
+              :aria-current="view === 'history' ? 'page' : undefined"
               @click="view = 'history'"
             >
               <History :size="16" />All commits</button
             ><button
               :class="{ active: view === 'reflog' }"
+              :aria-current="view === 'reflog' ? 'page' : undefined"
               @click="view = 'reflog'"
             >
               <GitCommitHorizontal :size="16" />Reflog & recovery
@@ -852,16 +915,17 @@ watch(amend, async (value) => {
               ><button
                 v-for="tree in snapshot.worktrees"
                 :key="tree.path"
-                class="tree-row"
+                class="tree-row worktree-row"
                 :title="tree.path"
+                :class="{ 'current-worktree': normalized(tree.path) === normalized(repo) }"
+                :aria-current="normalized(tree.path) === normalized(repo) ? 'true' : undefined"
                 aria-haspopup="menu" @contextmenu="worktreeMenu($event, tree.path)" @keydown.shift.f10.prevent="worktreeMenu($event, tree.path)"
-                @click="!example && w.openRepo(tree.path)"
+                @click="!example && normalized(tree.path) !== normalized(repo) && w.openRepo(tree.path)"
               >
-                <FolderGit2 :size="14" /><span>{{ tree.branch }}</span
-                ><span
+                <FolderGit2 :size="14" /><span class="worktree-name"><strong>{{ tree.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</strong><small>{{ normalized(tree.path) === normalized(snapshot.repositoryRoot || snapshot.worktrees[0]?.path || '') ? 'Main · ' : '' }}{{ tree.branch || 'Detached HEAD' }}</small></span><span
                   v-if="normalized(tree.path) === normalized(repo)"
                   class="tiny-label"
-                  >here</span
+                  >Current</span
                 ></button
               ><button class="tree-row subdued" @click="ask('worktree-add')">
                 <Plus :size="13" />New worktree

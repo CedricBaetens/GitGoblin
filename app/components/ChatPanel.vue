@@ -17,7 +17,7 @@ import {
   Wrench,
 } from "lucide-vue-next";
 import { conversationTurns } from '~/lib/conversation-turns';
-import { visibleThreads } from "~/lib/threads";
+import { isThreadRunning, repositoryThreadKey, repositoryThreads, repositoryThreadSelection } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop } from "~/lib/native";
 import type { T3Thread, T3Project, T3Projection } from "~/lib/types";
@@ -76,7 +76,7 @@ function trackConversationScroll() {
   if (el) followMessages = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 }
 watch(() => props.visible, (visible) => { if (visible) { followMessages = true; void scrollToLatest(); } });
-const conversations = computed(() => visibleThreads(threads.value));
+const rememberedThreads = ref<Record<string, string>>({});
 const thread = computed(() =>
   threads.value.find((t) => t.id === selectedId.value),
 );
@@ -101,17 +101,9 @@ const activityStatus = computed(() => sending.value ? 'Sending instruction…' :
   : thread.value?.status === 'error' ? 'Task failed' : 'Ready');
 watch(turns, () => void scrollToLatest(), { flush: 'post' });
 const matchingThreads = computed(() =>
-  threads.value.filter(
-    (t) =>
-      normalize(
-        t.worktreePath ||
-          projects.value.find((p) => p.id === t.projectId)?.workspaceRoot ||
-          "",
-      ) === normalize(props.repo),
-  ),
+  repositoryThreads(threads.value, projects.value, props.repo),
 );
-const normalize = (s: string) =>
-  s.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
+const activeMatchingThreads = computed(() => matchingThreads.value.filter(isThreadRunning));
 client.onChange = () => {
   state.value = client.status;
   error.value = client.error;
@@ -120,18 +112,20 @@ client.onChange = () => {
   projection.value = client.projection ? { ...client.projection } : undefined;
   emit("threads", threads.value, projects.value, connected.value);
 };
-function select(id: string) {
+function select(id: string, followWorktree = true) {
+  const t = threads.value.find((thread) => thread.id === id);
+  const path = t?.worktreePath || projects.value.find((project) => project.id === t?.projectId)?.workspaceRoot;
+  if (id && path && repositoryThreadKey(path) === repositoryThreadKey(props.repo)) {
+    rememberedThreads.value[repositoryThreadKey(path)] = id;
+    try { localStorage.setItem('gitgoblin.selectedConversations', JSON.stringify(rememberedThreads.value)); } catch { /* Keep the selection in memory if storage is unavailable. */ }
+  }
   followMessages = true;
   if (selectedId.value) drafts.set(selectedId.value, prompt.value);
   prompt.value = drafts.get(id) || "";
   selectedId.value = id;
   client.selectThread(id);
   void scrollToLatest();
-  const t = threads.value.find((t) => t.id === id);
-  const path =
-    t?.worktreePath ||
-    projects.value.find((p) => p.id === t?.projectId)?.workspaceRoot;
-  if (path) emit("selectWorktree", path, id);
+  if (followWorktree && path) emit("selectWorktree", path, id);
 }
 async function pair() {
   try {
@@ -229,6 +223,11 @@ function approvalContext(id: string) {
   return typeof item?.prompt === "string" ? item.prompt : "";
 }
 onMounted(async () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('gitgoblin.selectedConversations') || '{}');
+    if (saved && typeof saved === 'object' && !Array.isArray(saved))
+      rememberedThreads.value = Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch { /* Invalid preferences do not prevent connecting. */ }
   if (desktop()) {
     try {
       const saved = await invoke<string | null>("t3_restore");
@@ -244,15 +243,11 @@ onMounted(async () => {
     }
   }
 });
-watch(conversations, (available) => {
-  if (selectedId.value && !available.some((thread) => thread.id === selectedId.value)) {
-    drafts.set(selectedId.value, prompt.value);
-    selectedId.value = "";
-    prompt.value = "";
-    projection.value = undefined;
-    client.selectThread("");
-  }
-});
+watch([() => props.repo, connected, matchingThreads], () => {
+  if (props.example) return;
+  const next = connected.value ? repositoryThreadSelection(matchingThreads.value, rememberedThreads.value[repositoryThreadKey(props.repo)]) : '';
+  if (next !== selectedId.value) select(next, false);
+}, { immediate: true });
 onUnmounted(() => client.disconnect());
 defineExpose({
   select,
@@ -331,8 +326,8 @@ defineExpose({
       </div>
     </template>
     <template v-else-if="connected">
-      <div v-if="matchingThreads.length > 1" class="shared-note">
-        {{ matchingThreads.length }} chats share this worktree and its changes.
+      <div v-if="activeMatchingThreads.length > 1" class="shared-note">
+        {{ activeMatchingThreads.length }} agents are working in this worktree.
       </div>
       <div ref="conversationBody" class="conversation-body" @scroll="trackConversationScroll">
         <div v-if="!thread" class="panel-empty">

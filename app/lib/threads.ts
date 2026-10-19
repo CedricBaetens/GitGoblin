@@ -1,4 +1,15 @@
-import type { T3Thread } from "./types";
+import type { T3Project, T3Thread } from "./types";
+
+export const repositoryThreadKey = (path: string) => path.replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
+export function repositoryThreads(threads: T3Thread[], projects: T3Project[], repo: string) {
+  if (!repo) return [];
+  return threads.filter(thread => repositoryThreadKey(thread.worktreePath || projects.find(project => project.id === thread.projectId)?.workspaceRoot || '') === repositoryThreadKey(repo));
+}
+export function repositoryThreadSelection(threads: T3Thread[], remembered?: string) {
+  const available = visibleThreads(threads);
+  return available.find(thread => thread.id === remembered)?.id || available[0]?.id || '';
+}
+export const isThreadRunning = (thread: T3Thread) => !!thread.activeRunId || ['starting', 'running', 'busy'].includes(thread.status);
 
 const timestamp = (value?: string | null) => Date.parse(value || "") || 0;
 

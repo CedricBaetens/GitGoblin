@@ -266,7 +266,9 @@ small {
   }
 }
 .sidebar {
-  background: #141519;
+  position: relative;
+  min-width: 0;
+  background: #14171e;
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
@@ -276,7 +278,10 @@ small {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 21px 15px 18px;
+  padding: 18px 15px;
+  margin-bottom: 12px;
+  background: #1a1f2a;
+  border-bottom: 1px solid #30384a;
   color: #a7b3d6;
 }
 .repository-picker > div {
@@ -288,12 +293,12 @@ small {
 }
 .repository-picker strong {
   color: #e3e5ed;
-  font-size: 13px;
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .repository-picker span {
-  color: #737987;
+  color: #93a0b6;
   font-size: 10px;
 }
 .sidebar-scroll {
@@ -305,18 +310,20 @@ small {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 .main-nav button {
   justify-content: flex-start;
   padding: 9px 10px;
-  color: #9298a6;
+  color: #aab5c9;
   border-radius: 5px;
   font-size: 12px;
 }
 .main-nav button.active {
-  background: #252a39;
-  color: #bdcaff;
+  background: #2c3753;
+  color: #eef1ff;
+  box-shadow: inset 3px 0 #a9baff;
+  font-weight: 600;
 }
 .main-nav svg {
   color: #7e8597;
@@ -335,26 +342,31 @@ small {
   text-align: center;
 }
 .nav-section {
-  margin: 17px 0;
+  margin: 14px 0;
+  padding-top: 10px;
+  border-top: 1px solid #2c3341;
 }
 .section-heading {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  font-size: 9px;
-  letter-spacing: 1.1px;
+  font-size: 10px;
+  letter-spacing: 0.8px;
   font-weight: 650;
-  color: #727886;
+  color: #a5b2ca;
   padding: 5px 8px 8px;
   gap: 6px;
 }
 .section-heading > span {
   margin-left: auto;
-  font-weight: 400;
+  font-weight: 500;
   font-size: 10px;
   letter-spacing: 0;
-  color: #636977;
+  color: #9caac2;
+  background: #262e3d;
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 .tree-row {
   display: flex;
@@ -363,7 +375,7 @@ small {
   width: 100%;
   font-size: 11px;
   padding: 8px 11px;
-  color: #969daa;
+  color: #b0bbcd;
   min-height: 32px;
 }
 .tree-row > span:not(.status-dot):not(.tiny-label) {
@@ -372,11 +384,12 @@ small {
   white-space: nowrap;
 }
 .tree-row svg {
-  color: #697184;
+  color: #899bb8;
 }
 .tree-row.current {
-  color: #c6d2f4;
-  background: #1e222d;
+  color: #e4eaff;
+  background: #27334a;
+  box-shadow: inset 2px 0 #9eafea;
 }
 .tree-row > .status-dot:last-child {
   margin-left: auto;
@@ -387,7 +400,7 @@ small {
 }
 .tree-row.subdued {
   font-size: 10px;
-  color: #686f7d;
+  color: #8897af;
 }
 .tiny-label {
   margin-left: auto;
@@ -397,7 +410,7 @@ small {
 .nav-hint {
   font-size: 11px;
   line-height: 1.7;
-  color: #646b78;
+  color: #8795ab;
   padding: 5px 14px;
 }
 .compact .section-heading {
@@ -1620,7 +1633,7 @@ small {
     --chat: 280px;
   }
   .app-shell:not(.chat-hidden) {
-    grid-template-columns: 190px minmax(0, 1fr);
+    grid-template-columns: var(--sidebar) minmax(0, 1fr);
   }
   .app-shell:not(.chat-hidden) > .chat-panel {
     position: absolute;
@@ -1739,3 +1752,17 @@ small {
 .favorite-tabs button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .favorite-tabs button svg { flex-shrink: 0; color: #d6be80; }
 .favorite-tabs button[aria-current] { color: #e0e6f4; background: #252a37; border-bottom-color: #a4b3ed; }
+
+.sidebar-resize { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 30; cursor: col-resize; touch-action: none; outline: none; }
+.sidebar-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
+.sidebar-resize:hover::after, .sidebar-resize:focus-visible::after, .resizing-sidebar .sidebar-resize::after { background: #9baef2; }
+.resizing-sidebar, .resizing-sidebar * { cursor: col-resize !important; user-select: none !important; }
+.sidebar .tree-row.current-worktree { color: #d8e4ff; background: #202c3f; }
+.sidebar .current-worktree .tiny-label { color: #c3d2ff; background: #354665; padding: 2px 5px; border-radius: 4px; }
+.sidebar .worktree-row { padding-top: 8px; padding-bottom: 8px; }
+.sidebar .worktree-name { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; gap: 4px; }
+.sidebar .worktree-name strong { font-size: 11px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.sidebar .worktree-name small { font-size: 10px; color: #96a7c3; max-width: 100%; flex: none; }
+.sidebar .worktree-row .tiny-label { flex-shrink: 0; }
+.sidebar .nav-section > .section-heading:not(:first-child) { border-top: 1px solid #2c3341; margin-top: 12px; padding-top: 12px; border-radius: 0; }
+.sidebar button:focus-visible, .sidebar summary:focus-visible { outline: 2px solid #a7b6ff; outline-offset: -2px; }

@@ -51,6 +51,9 @@ summary:hover { background: #252831; color: #f0f1f7; }
 summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 details[open] > summary > .folder-chevron { transform: rotate(90deg); }
 .tree-row { padding-top: 5px; padding-bottom: 5px; min-height: 28px; }
+.tree-row.current { color: #d6f4e1; background: #20372e; box-shadow: inset 2px 0 #8bcca6; font-weight: 600; }
+.tree-row.current > svg { color: #a0dfb9; }
+summary.tree-row { color: #aab8ce; }
 button.tree-row { padding-left: 32px; }
 .tree-row > .branch-tracking { display: flex; flex: 0 0 auto; gap: 6px; margin-left: auto; overflow: visible; font-size: 10px; font-variant-numeric: tabular-nums; }
 .branch-tracking > span { display: inline-flex; align-items: center; gap: 2px; }

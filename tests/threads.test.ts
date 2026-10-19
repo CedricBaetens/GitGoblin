@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { visibleThreads } from "../app/lib/threads";
+import { isThreadRunning, repositoryThreads, repositoryThreadSelection, visibleThreads } from "../app/lib/threads";
 import type { T3Thread } from "../app/lib/types";
 
 const thread = (id: string, extra: Partial<T3Thread> = {}): T3Thread => ({
@@ -17,6 +17,25 @@ it("hides settled, archived and deleted conversations, including settlement upda
   expect(visibleThreads(items)).toEqual([]);
   items[1] = { ...items[1]!, settledOverride: "active" };
   expect(visibleThreads(items).map((t) => t.id)).toEqual(["settled"]);
+});
+
+it('restores each repository conversation without choosing a different repo or worktree', () => {
+  const items = [thread('a-first', { worktreePath: 'D:/A', activeOrderKey: 'a' }), thread('a-selected', { worktreePath: 'D:/A', activeOrderKey: 'b' }), thread('b-selected', { worktreePath: 'D:/B' }), thread('linked', { worktreePath: 'D:/A-linked' })];
+  const a = repositoryThreads(items, [], 'd:\\a/');
+  const b = repositoryThreads(items, [], 'D:/B');
+  expect(repositoryThreadSelection(a, 'a-selected')).toBe('a-selected');
+  expect(repositoryThreadSelection(b, 'b-selected')).toBe('b-selected');
+  expect(repositoryThreadSelection(a, 'a-selected')).toBe('a-selected');
+  expect(repositoryThreadSelection(a, 'b-selected')).toBe('a-first');
+  expect(repositoryThreadSelection(repositoryThreads(items, [], 'D:/Empty'), 'a-selected')).toBe('');
+  expect(repositoryThreadSelection([{ ...a[1]!, archivedAt: 'today' }, a[0]!], 'a-selected')).toBe('a-first');
+});
+
+it('resolves project-root conversations and counts only running agents', () => {
+  const inactive = Array.from({ length: 32 }, (_, i) => thread(`idle-${i}`));
+  const items = [...inactive, thread('run', { activeRunId: 'run' }), thread('starting', { status: 'starting' })];
+  const matched = repositoryThreads(items, [{ id: 'project', title: '', workspaceRoot: 'D:/A', defaultModelSelection: { instanceId: 'test', model: 'test' } }], 'D:/A');
+  expect(matched.filter(isThreadRunning).map(thread => thread.id)).toEqual(['run', 'starting']);
 });
 
 it("matches pinned and active ordering regardless of update arrival order", () => {
