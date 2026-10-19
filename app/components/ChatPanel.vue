@@ -639,6 +639,10 @@ defineExpose({
 </template>
 
 <style scoped>
+.chat-panel { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+.conversation-body .message p { font-size: 12px; line-height: 1.75; color: #d4d7df; }
+.composer textarea { font-size: 12px; line-height: 1.6; }
+
 .new-conversation-dialog { width: 680px; }
 .new-conversation-dialog textarea { width: 100%; font-size: 12px; }
 .conversation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
