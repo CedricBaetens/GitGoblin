@@ -2,7 +2,7 @@
 import { computed, ref, shallowRef, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { Check, MessageSquarePlus, LoaderCircle } from "lucide-vue-next";
 import { parseDiffFiles, splitDiffLines, selectedPatch } from "~/lib/diff";
-import { diffWindow, diffRowHeight, type DiffChange } from '~/lib/diff-window';
+import { diffWindow, type DiffChange } from '~/lib/diff-window';
 import type { DiffSyntax } from "~/lib/syntax";
 const props = defineProps<{ text: string; mode: string; path?: string; editable?: boolean; loading?: boolean; disabled?: boolean; wholeFile?: boolean }>();
 const syntax = shallowRef<DiffSyntax>({});
@@ -80,6 +80,19 @@ onMounted(() => {
 onUnmounted(() => resize?.disconnect());
 const parsed = computed(() => parseDiffFiles(props.text));
 const wrapLines = ref(false);
+const fontSize = ref(11);
+const rowHeight = computed(() => fontSize.value + 12);
+onMounted(() => {
+  try {
+    const saved = Number(localStorage.getItem('gitgoblin.diffFontSize'));
+    if (Number.isInteger(saved) && saved >= 9 && saved <= 20) fontSize.value = saved;
+  } catch { /* Keep the default when storage is unavailable. */ }
+});
+watch(fontSize, async size => {
+  try { localStorage.setItem('gitgoblin.diffFontSize', String(size)); } catch { /* Keep the size in memory. */ }
+  await nextTick();
+  onScroll();
+});
 const layout = ref('split');
 const horizontalScroll = ref({ left: 0, right: 0 });
 const horizontalWidth = ref({ left: 0, right: 0 });
@@ -87,7 +100,7 @@ function scrollSide(side: 'left' | 'right', event: Event) {
   horizontalScroll.value[side] = (event.currentTarget as HTMLElement).scrollLeft;
 }
 let horizontalResize: ResizeObserver | undefined;
-watch(() => [props.text, layout.value, wrapLines.value], async () => {
+watch(() => [props.text, layout.value, wrapLines.value, fontSize.value], async () => {
   await nextTick();
   horizontalResize?.disconnect();
   horizontalResize = new ResizeObserver(() => {
@@ -123,17 +136,17 @@ const geometry = computed(() => {
       lines.forEach((pair, i) => pair.forEach(line => {
         if (!line) return;
         width = Math.max(width, line.text.replace(/\t/g, '  ').length);
-        if (line.kind === 'add' || line.kind === 'delete') changes.push({ offset: top + i * diffRowHeight, height: diffRowHeight, kind: line.kind, line: String(line.next || line.old) });
+        if (line.kind === 'add' || line.kind === 'delete') changes.push({ offset: top + i * rowHeight.value, height: rowHeight.value, kind: line.kind, line: String(line.next || line.old) });
       }));
-      offset += lines.length * diffRowHeight;
+      offset += lines.length * rowHeight.value;
       return { ...hunk, rows, top, count: lines.length };
     });
     return { ...file, hunks, plainHeight };
   });
-  return { files, changes, longest, width: width * 6.7 + 125 };
+  return { files, changes, longest, width: width * fontSize.value * 0.61 + 125 };
 });
 const files = computed(() => geometry.value.files.map(file => ({ ...file, hunks: file.hunks.map(hunk => {
-  const window = large.value ? diffWindow(hunk.count, hunk.top, scroll.value, viewportHeight.value) : { start: 0, end: hunk.count, before: 0, after: 0 };
+  const window = large.value ? diffWindow(hunk.count, hunk.top, scroll.value, viewportHeight.value, rowHeight.value) : { start: 0, end: hunk.count, before: 0, after: 0 };
   return { ...hunk, window, visibleLines: hunk.lines.slice(window.start, window.end), visibleRows: hunk.rows.slice(window.start, window.end) };
 }) })));
 let jumpToChangePending = false;
@@ -202,7 +215,7 @@ function context() {
 }
 </script>
 <template>
-  <div class="diff-view" :class="{ 'side-by-side': layout === 'split', 'large-diff': large, 'wrap-lines': wrapLines }">
+  <div class="diff-view" :style="{ '--diff-font-size': `${fontSize}px`, '--diff-row-height': `${rowHeight}px` }" :class="{ 'side-by-side': layout === 'split', 'large-diff': large, 'wrap-lines': wrapLines }">
     <div class="diff-actions">
       <div class="diff-layout" role="group" aria-label="Diff layout">
         <button :aria-pressed="layout === 'unified'" @click="layout = 'unified'">Unified</button>
@@ -210,6 +223,11 @@ function context() {
       </div>
       <button class="small wrap-toggle" :aria-pressed="wrapLines" @click="wrapLines = !wrapLines">Wrap lines</button>
       <button v-if="wholeFile !== undefined" class="small" :aria-pressed="wholeFile" @click="emit('update:wholeFile', !wholeFile)">Whole file</button>
+      <div class="diff-font-controls" role="group" aria-label="Diff font size">
+        <button class="small" aria-label="Decrease diff font size" title="Decrease diff font size" :disabled="fontSize <= 9" @click="fontSize--">A−</button>
+        <output aria-label="Diff font size" aria-live="polite">{{ fontSize }}px</output>
+        <button class="small" aria-label="Increase diff font size" title="Increase diff font size" :disabled="fontSize >= 20" @click="fontSize++">A+</button>
+      </div>
       <LoaderCircle class="spin diff-loading" :class="{ visible: loading }" :size="13" :aria-hidden="!loading" aria-label="Refreshing diff" />
       <span>{{
         selected.size
@@ -314,7 +332,7 @@ function context() {
       </div>
     </div>
     </div>
-    <DiffOverview v-if="wholeFile" :scroller="scroller" :revision="[text, layout, wrapLines]" :changes="large ? geometry.changes : undefined" />
+    <DiffOverview v-if="wholeFile" :scroller="scroller" :revision="[text, layout, wrapLines, fontSize]" :changes="large ? geometry.changes : undefined" />
     </div>
     <div ref="selectionMenu" popover="auto" role="menu" aria-label="Selected code actions" class="selection-menu" @contextmenu.prevent>
       <button role="menuitem" @click="editInChat"><MessageSquarePlus :size="14" />Ask T3 to edit selection</button>
@@ -323,8 +341,12 @@ function context() {
 </template>
 
 <style scoped>
+.diff-line { font-size: var(--diff-font-size); line-height: var(--diff-row-height); min-height: var(--diff-row-height); }
+.line-select { min-height: var(--diff-row-height); }
+.diff-font-controls { display: flex; align-items: center; flex-shrink: 0; gap: 3px; }
+.diff-font-controls output { min-width: 28px; text-align: center; font-size: 10px; }
 /* Fixed row geometry keeps large files stable as offscreen rows are recycled. */
-.large-diff .diff-line { height: 23px; min-height: 23px; }
+.large-diff .diff-line { height: var(--diff-row-height); min-height: var(--diff-row-height); }
 .large-diff .split-cell code { white-space: pre; overflow-wrap: normal; }
 .large-diff .hunk-header { height: 42px; }
 .large-diff .diff-file-label { height: 32px; white-space: nowrap; }
@@ -358,12 +380,11 @@ function context() {
 .split-labels span { padding: 7px 15px; }
 .split-cell { display: block; min-width: 0; width: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .split-cell::-webkit-scrollbar { display: none; }
-.split-line-content { display: flex; min-height: 23px; min-width: 100%; width: max-content; }
+.split-line-content { display: flex; min-height: var(--diff-row-height); min-width: 100%; width: max-content; }
 .split-scrollbars { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); flex-shrink: 0; }
 .side-scrollbar { overflow-x: scroll; overflow-y: hidden; min-width: 0; height: 16px; }
 .side-scrollbar:first-child { border-right: 1px solid #353d4d; }
-.side-scrollbar code { display: block; box-sizing: content-box; width: max-content; min-width: calc(100% - 86px); padding-left: 74px; padding-right: 12px; height: 1px; font-size: 11px; white-space: pre; visibility: hidden; }
-@media (min-width: 1650px) { .side-scrollbar code { font-size: 12px; } }
+.side-scrollbar code { display: block; box-sizing: content-box; width: max-content; min-width: calc(100% - 86px); padding-left: 74px; padding-right: 12px; height: 1px; font-size: var(--diff-font-size); white-space: pre; visibility: hidden; }
 .split-cell:first-child, .split-labels span:first-child { border-right: 1px solid #353d4d; }
 .split-cell code { min-width: 0; flex: 1; white-space: pre; padding-right: 12px; }
 .wrap-toggle[aria-pressed="true"] { background: #2a3244; color: #c1cfff; }

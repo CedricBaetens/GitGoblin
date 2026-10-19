@@ -380,7 +380,7 @@ const definitions: Record<
   'discard-files': { title: 'Discard changes', description: '' },
   "branch-create": {
     title: "Create branch",
-    description: "Create a branch at the selected commit.",
+    description: "Create a branch at the selected commit and switch to it.",
     fields: [
       { key: "text", label: "Branch name" },
       { key: "target", label: "Starting commit or branch" },

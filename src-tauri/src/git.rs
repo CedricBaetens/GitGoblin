@@ -590,7 +590,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
                     &req.target
                 },
             )?;
-            json!(git(&repo, &["branch", &req.text, &target])?)
+            json!(git(&repo, &["switch", "-c", &req.text, &target])?)
         }
         "branch-delete" => {
             branch(&repo, &req.target)?;
@@ -933,6 +933,36 @@ mod tests {
         git(repo, &["commit", "--amend", "--allow-empty", "-m", "rewritten again"]).unwrap();
         assert!(push("force").unwrap_err().contains("stale info"));
         assert_eq!(oid(remote.path(), "main").unwrap(), unseen.trim());
+    }
+
+    #[test]
+    fn branch_creation_switches_and_preserves_changes_when_checkout_is_blocked() {
+        let dir = fixture();
+        let repo = dir.path();
+        fs::write(repo.join("file.txt"), "initial\n").unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "initial"]).unwrap();
+        let initial = oid(repo, "HEAD").unwrap();
+        let create = |name: &str, target: &str| {
+            let mut req = request(repo, "branch-create");
+            req.text = name.into();
+            req.target = target.into();
+            execute(req)
+        };
+        fs::write(repo.join("file.txt"), "local edits\n").unwrap();
+        create("feature/new", "").unwrap();
+        assert_eq!(git(repo, &["branch", "--show-current"]).unwrap().trim(), "feature/new");
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "local edits\n");
+        git(repo, &["commit", "-am", "feature"]).unwrap();
+        fs::write(repo.join("file.txt"), "unsaved work\n").unwrap();
+        assert!(create("blocked", &initial).is_err());
+        assert!(oid(repo, "blocked").is_err());
+        assert_eq!(git(repo, &["branch", "--show-current"]).unwrap().trim(), "feature/new");
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "unsaved work\n");
+        fs::write(repo.join("file.txt"), "local edits\n").unwrap();
+        create("from-initial", &initial).unwrap();
+        assert_eq!(git(repo, &["branch", "--show-current"]).unwrap().trim(), "from-initial");
+        assert_eq!(oid(repo, "HEAD").unwrap(), initial);
     }
 
     #[test]
