@@ -7,6 +7,14 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+mod bulk;
+
+#[derive(Debug, Deserialize)]
+pub struct BulkFile {
+    pub path: String,
+    #[serde(default)]
+    pub fingerprint: String,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +37,8 @@ pub struct Request {
     pub offset: usize,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub files: Vec<BulkFile>,
 }
 
 #[derive(Serialize)]
@@ -192,12 +202,16 @@ fn file_content(repo: &Path, path: &str) -> Result<Option<Vec<u8>>, String> {
     }
 }
 fn fingerprint_content(repo: &Path, path: &str, content: Option<&[u8]>) -> Result<String, String> {
-    let mut hash = Sha256::new();
-    hash.update(bytes(
+    let index = bytes(
         repo,
         &["ls-files", "--stage", "-z", "--", path],
         None,
-    )?);
+    )?;
+    Ok(fingerprint_bytes(&index, content))
+}
+fn fingerprint_bytes(index: &[u8], content: Option<&[u8]>) -> String {
+    let mut hash = Sha256::new();
+    hash.update(index);
     match content {
         Some(content) => {
             hash.update(b"present\0");
@@ -205,7 +219,7 @@ fn fingerprint_content(repo: &Path, path: &str, content: Option<&[u8]>) -> Resul
         }
         None => hash.update(b"missing\0"),
     }
-    Ok(format!("{:x}", hash.finalize()))
+    format!("{:x}", hash.finalize())
 }
 fn check_fingerprint(repo: &Path, req: &Request) -> Result<(), String> {
     if req.fingerprint.is_empty() || fingerprint(repo, &req.path)? != req.fingerprint {
@@ -273,6 +287,11 @@ pub fn main_repository(path: &str) -> Result<String, String> {
 pub fn execute(req: Request) -> Result<Value, String> {
     let repo = root(&req.repo)?;
     let value = match req.action.as_str() {
+        "stage-files" | "unstage-files" => {
+            let stage = req.action == "stage-files";
+            bulk::update(&repo, &req.files, stage).map_err(|e| format!("No files were {}. {e}", if stage { "staged" } else { "unstaged" }))?;
+            json!(format!("{} files {}", req.files.len(), if stage { "staged" } else { "unstaged" }))
+        }
         "status" => json!(status(&repo)?),
         "snapshot" => {
             let files = status(&repo)?;
@@ -809,6 +828,7 @@ mod tests {
             whole_file: false,
             offset: 0,
             limit: None,
+            files: Vec::new(),
         }
     }
     #[test]
@@ -1058,6 +1078,157 @@ mod tests {
         execute(req).unwrap();
         assert_eq!(git(repo, &["rev-parse", "HEAD"]).unwrap(), original);
         assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "feature\n");
+    }
+
+    #[test]
+    fn bulk_stages_and_unstages_598_files_with_one_index_replacement() {
+        let dir = fixture();
+        let repo = dir.path();
+        fs::create_dir(repo.join("nested")).unwrap();
+        let files: Vec<_> = (0..598).map(|i| {
+            let path = format!("nested/file {i} [test].txt");
+            fs::write(repo.join(&path), format!("content {i}\n")).unwrap();
+            BulkFile { path, fingerprint: String::new() }
+        }).collect();
+        let started = std::time::Instant::now();
+        let mut req = request(repo, "stage-files");
+        req.files = files.iter().map(|file| BulkFile { path: file.path.clone(), fingerprint: String::new() }).collect();
+        execute(req).unwrap();
+        println!("Bulk stage 598 files: {:?}", started.elapsed());
+        let staged = status(repo).unwrap();
+        assert_eq!(staged.len(), 598);
+        assert!(staged.iter().all(|file| file.index == "A" && file.worktree == " "));
+        let started = std::time::Instant::now();
+        let mut req = request(repo, "unstage-files");
+        req.files = files.iter().map(|file| BulkFile { path: file.path.clone(), fingerprint: String::new() }).collect();
+        execute(req).unwrap();
+        println!("Bulk unstage 598 files (unborn branch): {:?}", started.elapsed());
+        assert!(git(repo, &["ls-files"]).unwrap().is_empty());
+        assert!(files.iter().all(|file| repo.join(&file.path).exists()));
+        assert!(!repo.join(".git/index.lock").exists());
+    }
+
+    #[test]
+    fn bulk_preserves_filters_deletions_and_unselected_files() {
+        let dir = fixture();
+        let repo = dir.path();
+        fs::write(repo.join(".gitattributes"), "*.txt text eol=lf\n").unwrap();
+        fs::write(repo.join("remove.txt"), "remove\n").unwrap();
+        fs::write(repo.join("keep.txt"), "before\n").unwrap();
+        fs::write(repo.join("already.txt"), "before\n").unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "initial"]).unwrap();
+        fs::write(repo.join("already.txt"), "previously staged\n").unwrap();
+        git(repo, &["add", "already.txt"]).unwrap();
+        fs::remove_file(repo.join("remove.txt")).unwrap();
+        fs::write(repo.join("keep.txt"), "not selected\n").unwrap();
+        fs::write(repo.join("new [1].txt"), "line one\r\nline two\r\n").unwrap();
+        let files: Vec<_> = ["new [1].txt", "remove.txt"].iter().map(|path| BulkFile { path: (*path).into(), fingerprint: fingerprint(repo, path).unwrap() }).collect();
+        bulk::update(repo, &files, true).unwrap();
+        assert_eq!(git(repo, &["show", ":new [1].txt"]).unwrap(), "line one\nline two\n");
+        assert_eq!(git(repo, &["show", ":keep.txt"]).unwrap(), "before\n");
+        assert_eq!(git(repo, &["show", ":already.txt"]).unwrap(), "previously staged\n");
+        assert!(git(repo, &["show", ":remove.txt"]).is_err());
+        let without_review: Vec<_> = files.iter().map(|file| BulkFile { path: file.path.clone(), fingerprint: String::new() }).collect();
+        bulk::update(repo, &without_review, false).unwrap();
+        assert_eq!(git(repo, &["diff", "--cached", "--name-only"]).unwrap().trim(), "already.txt");
+        assert!(!repo.join("remove.txt").exists());
+        assert_eq!(fs::read(repo.join("new [1].txt")).unwrap(), b"line one\r\nline two\r\n");
+    }
+
+    #[test]
+    fn bulk_rejects_stale_files_and_preserves_existing_locks_without_partial_staging() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        fs::write(repo.join("first.txt"), "first\n").unwrap();
+        fs::write(repo.join("second.txt"), "second\n").unwrap();
+        let files: Vec<_> = ["first.txt", "second.txt"].iter().map(|path| BulkFile { path: (*path).into(), fingerprint: fingerprint(repo, path).unwrap() }).collect();
+        let index = fs::read(repo.join(".git/index")).unwrap();
+        fs::write(repo.join("second.txt"), "agent edit\n").unwrap();
+        assert!(bulk::update(repo, &files, true).unwrap_err().contains("changed since review"));
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(), index);
+        assert!(!repo.join(".git/index.lock").exists());
+        fs::write(repo.join(".git/index.lock"), "another process owns this").unwrap();
+        assert!(bulk::update(repo, &files, true).unwrap_err().contains("index is busy"));
+        assert_eq!(fs::read_to_string(repo.join(".git/index.lock")).unwrap(), "another process owns this");
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(), index);
+    }
+
+    #[test]
+    fn bulk_git_errors_leave_the_index_unchanged_and_a_retry_works() {
+        let dir = fixture();
+        let repo = dir.path();
+        fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
+        git(repo, &["add", ".gitignore"]).unwrap();
+        git(repo, &["commit", "-m", "initial"]).unwrap();
+        let index = fs::read(repo.join(".git/index")).unwrap();
+        fs::write(repo.join("good.txt"), "good\n").unwrap();
+        fs::write(repo.join("ignored.txt"), "ignored\n").unwrap();
+        let files: Vec<_> = ["good.txt", "ignored.txt"].iter().map(|path| BulkFile { path: (*path).into(), fingerprint: String::new() }).collect();
+        assert!(bulk::update(repo, &files, true).is_err());
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(), index);
+        assert!(!repo.join(".git/index.lock").exists());
+        bulk::update(repo, &files[..1], true).unwrap();
+        assert_eq!(git(repo, &["show", ":good.txt"]).unwrap(), "good\n");
+    }
+
+    #[test]
+    fn bulk_stages_captured_bytes_even_if_a_clean_filter_edits_the_live_file() {
+        let dir = fixture();
+        let repo = dir.path();
+        let original = repo.join("file.txt").to_string_lossy().replace('\\', "/").replace('\'', "'\\''");
+        git(repo, &["config", "filter.test.clean", &format!("printf 'later edit\\n' > '{original}'; cat")]).unwrap();
+        fs::write(repo.join(".gitattributes"), "*.txt filter=test\n").unwrap();
+        fs::write(repo.join("file.txt"), "captured\n").unwrap();
+        let files: Vec<_> = [".gitattributes", "file.txt"].iter().map(|path| BulkFile { path: (*path).into(), fingerprint: String::new() }).collect();
+        bulk::update(repo, &files, true).unwrap();
+        assert_eq!(git(repo, &["show", ":file.txt"]).unwrap(), "captured\n");
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "later edit\n");
+    }
+
+    #[test]
+    fn bulk_updates_only_the_selected_linked_worktree_index() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let linked = parent.path().join("linked workspace");
+        git(repo, &["worktree", "add", "-b", "linked", linked.to_str().unwrap()]).unwrap();
+        fs::write(linked.join("one.txt"), "one\n").unwrap();
+        fs::write(linked.join("two.txt"), "two\n").unwrap();
+        let files: Vec<_> = ["one.txt", "two.txt"].iter().map(|path| BulkFile { path: (*path).into(), fingerprint: String::new() }).collect();
+        bulk::update(&linked, &files, true).unwrap();
+        assert_eq!(git(&linked, &["ls-files"]).unwrap().lines().count(), 2);
+        assert!(git(repo, &["ls-files"]).unwrap().is_empty());
+        bulk::update(&linked, &files, false).unwrap();
+        assert!(git(&linked, &["ls-files"]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bulk_timing_compared_with_repeated_file_operations() {
+        let dir = fixture();
+        let repo = dir.path();
+        let files: Vec<_> = (0..8).map(|i| {
+            let path = format!("file{i}.txt");
+            fs::write(repo.join(&path), "content\n").unwrap();
+            BulkFile { path, fingerprint: String::new() }
+        }).collect();
+        let start = std::time::Instant::now();
+        for file in &files {
+            let mut diff = request(repo, "diff");
+            diff.path = file.path.clone();
+            let current = execute(diff).unwrap();
+            let mut req = request(repo, "stage");
+            req.path = file.path.clone();
+            req.fingerprint = current["fingerprint"].as_str().unwrap().into();
+            execute(req).unwrap();
+        }
+        let sequential = start.elapsed();
+        bulk::update(repo, &files, false).unwrap();
+        let start = std::time::Instant::now();
+        bulk::update(repo, &files, true).unwrap();
+        println!("8 files: previous per-file path {:?}; bulk {:?}", sequential, start.elapsed());
     }
 
     #[test]

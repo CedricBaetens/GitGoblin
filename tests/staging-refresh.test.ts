@@ -84,3 +84,18 @@ it.each(['stage', 'unstage', 'patch'])('uses the fast refresh for the diff viewe
   expect(vi.mocked(git).mock.calls.map(([request]) => request.action)).toEqual([action, 'status']);
   scope.stop();
 });
+
+it.each(['working', 'staged'])('handles 598 %s files with one bulk mutation and one status refresh', async mode => {
+  vi.mocked(git).mockImplementation(async request => request.action === 'status' ? [] : '598 files updated');
+  const scope = effectScope();
+  const w = scope.run(() => useWorkbench())!;
+  w.repo.value = demoSnapshot.root;
+  w.snapshot.value = { ...demoSnapshot, files: [] };
+  const paths = Array.from({ length: 598 }, (_, i) => `folder/file-${i}.txt`);
+  vi.mocked(git).mockClear();
+  await w.stageFiles(paths, mode);
+  expect(vi.mocked(git).mock.calls.map(([request]) => request.action)).toEqual([mode === 'staged' ? 'unstage-files' : 'stage-files', 'status']);
+  expect(vi.mocked(git).mock.calls[0]![0].files?.map(file => file.path)).toEqual(paths);
+  expect(w.busy.value).toBe(false);
+  scope.stop();
+});

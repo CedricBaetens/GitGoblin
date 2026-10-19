@@ -319,6 +319,10 @@ export function useWorkbench() {
     const action = fileMode === 'staged' ? 'unstage' : 'stage';
     const reviewed = new Map(paths.map(path => [path, diffCache.get(JSON.stringify([repo.value, fileMode, base.value, path, wholeFile.value]))]));
     return runMutation(async () => {
+      if (paths.length > 1) {
+        notice.value = `${action === 'stage' ? 'Staging' : 'Unstaging'} ${paths.length} files…`;
+        return read<string>(`${action}-files`, { files: paths.map(path => ({ path, fingerprint: reviewed.get(path)?.fingerprint })) });
+      }
       let completed = 0;
       try {
         for (const path of paths) {

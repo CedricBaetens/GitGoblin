@@ -49,6 +49,7 @@ export interface GitRequest {
   wholeFile?: boolean;
   offset?: number;
   limit?: number;
+  files?: { path: string; fingerprint?: string }[];
 }
 export interface T3Project {
   id: string;
