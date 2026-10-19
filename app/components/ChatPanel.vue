@@ -259,7 +259,8 @@ defineExpose({
 });
 </script>
 <template>
-  <aside class="chat-panel">
+  <aside id="conversation-panel" class="chat-panel">
+    <slot />
     <div class="panel-heading">
       <span class="active-conversation" :title="thread?.title || 'Conversations'"><MessageSquare :size="15" /><span>{{ thread?.title || 'Conversations' }}</span></span>
       <div class="button-row">
@@ -336,13 +337,13 @@ defineExpose({
         </div>
         <template v-for="turn in turns" :key="turn.id">
           <div v-for="message in turn.users" :key="message.id" class="message user">
-            <p class="message-text">{{ message.text }}</p>
+            <ChatMarkdown :text="message.text" />
           </div>
           <details v-if="turn.work.length || turn.activities.length" class="work-details">
             <summary>{{ turn.summary }}<ChevronRight :size="13" /></summary>
             <div class="work-content">
               <div v-for="message in turn.work" :key="message.id" class="message">
-                <p class="message-text">{{ message.text }}<span v-if="message.streaming" class="streaming-cursor" aria-hidden="true" /></p>
+                <ChatMarkdown :text="message.text" :streaming="message.streaming" />
               </div>
               <div v-for="activity in turn.activities" :key="activity.id" class="chat-activity" :title="activity.title">
                 <CircleAlert v-if="activity.status === 'failed' || activity.status === 'error'" :size="13" class="activity-error" />
@@ -354,7 +355,7 @@ defineExpose({
             </div>
           </details>
           <div v-if="turn.final" class="message final-message">
-            <p class="message-text">{{ turn.final.text }}<span v-if="turn.final.streaming" class="streaming-cursor" aria-hidden="true" /></p>
+            <ChatMarkdown :text="turn.final.text" :streaming="turn.final.streaming" />
           </div>
         </template>
         <div v-for="request in requests" :key="request.id" class="approval">
@@ -577,7 +578,5 @@ defineExpose({
 .activity-done { color: #81bda2; }
 .activity-error { color: #e48791; }
 .streaming-label { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: #9baed4; }
-.streaming-cursor { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: #a8b6ec; animation: cursor-pulse 1s ease-in-out infinite alternate; }
-@keyframes cursor-pulse { to { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) { .streaming-cursor, .spin { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 </style>

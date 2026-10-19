@@ -78,8 +78,21 @@ const {
 const filesAsTree = ref(true);
 const preferredSidebarWidth = ref(defaultSidebarWidth);
 const sidebarViewport = ref(1280), sidebarChatWidth = ref(350);
+const preferredChatWidth = ref<number>();
+const preferredFilesWidth = ref<number>();
+const preferredDetailsHeight = ref<number>();
+const workspace = ref<HTMLElement>();
+const workspaceSize = ref({ width: 800, height: 700 });
+let workspaceObserver: ResizeObserver | undefined;
+const chatDocked = computed(() => sidebarViewport.value > (snapshot.value ? 1100 : 1000));
+const maxChatWidth = computed(() => Math.max(280, Math.min(800, sidebarViewport.value - (chatDocked.value ? preferredSidebarWidth.value + 400 : 32))));
+const chatWidth = computed(() => Math.max(280, Math.min(maxChatWidth.value, preferredChatWidth.value ?? (chatDocked.value ? sidebarChatWidth.value : 320))));
+const maxFilesWidth = computed(() => Math.max(180, Math.min(520, workspaceSize.value.width - 280)));
+const filesWidth = computed(() => preferredFilesWidth.value === undefined ? undefined : Math.max(180, Math.min(maxFilesWidth.value, preferredFilesWidth.value)));
+const maxDetailsHeight = computed(() => Math.max(170, workspaceSize.value.height - 250));
+const detailsHeight = computed(() => preferredDetailsHeight.value === undefined ? undefined : Math.max(170, Math.min(maxDetailsHeight.value, preferredDetailsHeight.value)));
 const resizingSidebar = ref(false);
-const sidebarRoom = computed(() => sidebarViewport.value - (chatVisible.value && sidebarViewport.value > 1100 ? sidebarChatWidth.value : 0));
+const sidebarRoom = computed(() => sidebarViewport.value - (chatVisible.value && chatDocked.value ? chatWidth.value : 0));
 const sidebarWidth = computed(() => clampSidebarWidth(preferredSidebarWidth.value, sidebarRoom.value));
 let sidebarPointer: number | undefined, sidebarStartX = 0, sidebarStartWidth = 0;
 function updateSidebarViewport() {
@@ -729,6 +742,10 @@ onMounted(() => {
   document.addEventListener('contextmenu', preventBrowserMenu, true);
   window.addEventListener('resize', updateSidebarViewport);
   updateSidebarViewport();
+  workspaceObserver = new ResizeObserver(([entry]) => {
+    if (entry) workspaceSize.value = { width: entry.contentRect.width, height: entry.contentRect.height };
+  });
+  if (workspace.value) workspaceObserver.observe(workspace.value);
   try {
     const saved = localStorage.getItem('gitgoblin.sidebarWidth');
     if (saved !== null) preferredSidebarWidth.value = clampSidebarWidth(Number(saved), Number.POSITIVE_INFINITY);
@@ -738,6 +755,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", keydown);
   document.removeEventListener('contextmenu', preventBrowserMenu, true);
   window.removeEventListener('resize', updateSidebarViewport);
+  workspaceObserver?.disconnect();
 });
 watch(amend, async (value) => {
   if (value && !commitMessage.value && snapshot.value?.head) {
@@ -752,7 +770,7 @@ watch(amend, async (value) => {
 });
 </script>
 <template>
-  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot, 'resizing-sidebar': resizingSidebar }" :style="{ '--sidebar': `${sidebarWidth}px` }">
+  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot, 'resizing-sidebar': resizingSidebar }" :style="{ '--sidebar': `${sidebarWidth}px`, '--chat': `${chatWidth}px`, '--files-width': filesWidth === undefined ? undefined : `${filesWidth}px`, '--details-height': detailsHeight === undefined ? undefined : `${detailsHeight}px` }">
     <header class="titlebar" data-tauri-drag-region="deep">
       <div class="brand">
         <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -1097,7 +1115,7 @@ watch(amend, async (value) => {
         </div>
       </div>
     </aside>
-    <main class="workspace">
+    <main ref="workspace" class="workspace">
       <div v-if="example" class="example-banner">
         <span>EXAMPLE WORKSPACE</span>Preview data · Git actions are
         disabled<button
@@ -1154,7 +1172,8 @@ watch(amend, async (value) => {
             >
           </div>
           <div class="review-grid">
-            <section class="files-panel">
+            <section id="changed-files" class="files-panel">
+              <ResizeHandle v-model="preferredFilesWidth" label="Resize changed files" controls="changed-files" storage-key="gitgoblin.filesWidth" :min="180" :max="maxFilesWidth" />
               <div class="files-toolbar">
               <div class="segmented">
                 <button :class="{ active: mode !== 'branch' }" @click="mode = 'working'">Local changes</button>
@@ -1320,7 +1339,8 @@ watch(amend, async (value) => {
             </form>
           </div>
           <HistoryList :commits="commits" :selected="selectedCommit?.id" :loading="w.historyLoading.value" :has-more="w.historyHasMore.value" @select="w.selectCommit" @context="commitMenu" @load-more="w.loadHistory()" />
-          <div class="commit-detail">
+          <div id="commit-details" class="commit-detail">
+            <ResizeHandle v-model="preferredDetailsHeight" label="Resize commit details" controls="commit-details" storage-key="gitgoblin.detailsHeight" :min="170" :max="maxDetailsHeight" horizontal reverse />
             <div class="detail-tabs" role="tablist" aria-label="Commit details">
               <button v-for="tab in ['commit', 'changes']" :key="tab" role="tab" :aria-selected="historyTab === tab" :class="{ active: historyTab === tab }" @click="historyTab = tab">{{ tab === 'commit' ? 'Commit' : 'Changes' }}</button>
             </div>
@@ -1448,7 +1468,9 @@ watch(amend, async (value) => {
       @select-worktree="openThreadWorktree"
       @threads="receiveThreads"
       @selection="selectedThreadId = $event"
-    />
+    >
+      <ResizeHandle v-model="preferredChatWidth" label="Resize conversations" controls="conversation-panel" storage-key="gitgoblin.chatWidth" :min="280" :max="maxChatWidth" reverse />
+    </ChatPanel>
     <Teleport to="body">
       <div v-if="renamePath" class="modal-backdrop" @click.self="!w.nameSaving.value && (renamePath = '')" @keydown.esc="!w.nameSaving.value && (renamePath = '')">
         <form class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-repository-title" @submit.prevent="saveRepositoryName">
