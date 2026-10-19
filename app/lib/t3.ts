@@ -367,7 +367,7 @@ export class T3Client {
     return this.call("orchestration.dispatchCommand", command);
   }
   sendMessage(thread: T3Thread, text: string) {
-    const titleSeed = text.trim() && thread.title === "New conversation" && (this.untitledThreads.has(thread.id) || (
+    const titleSeed = text.trim() && (thread.title === "New conversation" || thread.title === "New thread") && (this.untitledThreads.has(thread.id) || (
       this.projection?.thread.id === thread.id &&
       !this.projection.messages.some(message => message.role === "user")
     )) ? { titleSeed: text.trim() } : {};
@@ -437,7 +437,8 @@ export class T3Client {
       const threadId = crypto.randomUUID();
       return this.dispatch({
         type: "thread.create", commandId: crypto.randomUUID(), threadId, projectId,
-        title, modelSelection, runtimeMode: "full-access", interactionMode: "default",
+        // The legacy server only generates titles for its own placeholder.
+        title: title === "New conversation" ? "New thread" : title, modelSelection, runtimeMode: "full-access", interactionMode: "default",
         branch: null, worktreePath: worktreePath || null, createdAt: new Date().toISOString(),
       }).then(() => {
         if (title === "New conversation") this.untitledThreads.add(threadId);

@@ -37,6 +37,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it("creates a placeholder the legacy server allows an automatic title to replace", async () => {
+    const client = new T3Client(async () => "ws://127.0.0.1/ws");
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    socket.receive({ _tag: "Chunk", requestId: socket.sent[0].id, values: [{ kind: "snapshot", snapshot: {
+      snapshotSequence: 1, projects: [], threads: [],
+    } }] });
+    const creating = client.createThread("project", "New conversation", { instanceId: "codex", model: "test" });
+    const createdTitle = socket.sent.at(-1).payload.title;
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
+    const { threadId } = await creating;
+    const sending = client.sendMessage({ id: threadId, title: createdTitle } as any, "Investigate ticket 42");
+    const seed = socket.sent.at(-1).payload.titleSeed;
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
+    await sending;
+    // T3 0.0.45 ProviderCommandReactor's canReplaceThreadTitle contract:
+    // only its default placeholder or a title matching the seed can be replaced.
+    const canReplace = createdTitle.trim() === "New thread" || (!!seed?.trim() && createdTitle.trim() === seed.trim());
+    expect(canReplace).toBe(true);
+    expect(seed).toBe("Investigate ticket 42");
+  });
+
   it.each([false, true])("creates an empty conversation in its worktree and seeds only its first message title (legacy=%s)", async legacy => {
     const client = new T3Client(async () => "ws://127.0.0.1/ws");
     clients.push(client);
@@ -50,13 +73,13 @@ describe("T3 client contract", () => {
     const modelSelection = { instanceId: "codex", model: "test" };
     const creating = client.createThread("project", "New conversation", modelSelection, "D:/feature");
     const creation = socket.sent.at(-1);
-    expect(creation.payload).toMatchObject({ title: "New conversation", projectId: "project", modelSelection, runtimeMode: "full-access" });
+    expect(creation.payload).toMatchObject({ title: legacy ? "New thread" : "New conversation", projectId: "project", modelSelection, runtimeMode: "full-access" });
     expect(creation.payload.initialMessage).toBeUndefined();
     if (legacy) expect(creation.payload.worktreePath).toBe("D:/feature");
     else expect(creation.payload.workspaceStrategy).toEqual({ type: "existing_worktree", worktreePath: "D:/feature" });
     acknowledge({ threadId: "new" });
     const { threadId } = await creating;
-    const thread = { id: threadId, title: "New conversation", modelSelection, runtimeMode: "full-access", interactionMode: "default" } as any;
+    const thread = { id: threadId, title: creation.payload.title, modelSelection, runtimeMode: "full-access", interactionMode: "default" } as any;
     expect(socket.sent.filter(frame => frame.payload?.type === "message.dispatch" || frame.payload?.type === "thread.turn.start")).toHaveLength(0);
     const sending = client.sendMessage(thread, "/triage #42");
     expect(socket.sent.at(-1).payload).toMatchObject({ titleSeed: "/triage #42", threadId });
@@ -69,12 +92,12 @@ describe("T3 client contract", () => {
     await followup;
   });
 
-  it("seeds a restored empty conversation but preserves an existing conversation title", async () => {
+  it.each(["New conversation", "New thread"])("seeds a restored empty %s but preserves an existing conversation title", async title => {
     const client = new T3Client(async () => "ws://127.0.0.1/ws");
     clients.push(client);
     await client.connect();
     const socket = FakeSocket.latest;
-    const thread = { id: "empty", title: "New conversation" } as any;
+    const thread = { id: "empty", title } as any;
     client.projection = { thread, messages: [], runtimeRequests: [], turnItems: [] };
     const first = client.sendMessage(thread, "Investigate issue");
     expect(socket.sent.at(-1).payload.titleSeed).toBe("Investigate issue");

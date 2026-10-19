@@ -3,14 +3,17 @@ import { repositoryThreadKey } from "./threads";
 
 export const conversationPresets = [
   { label: "Blank", description: "Start with your own instruction.", prompt: "" },
-  { label: "Triage ticket", description: "Investigate a ticket and clarify the scope.", prompt: "/triage ", ticket: true },
-  { label: "Implement ticket", description: "Build a ticket with tests and code review.", prompt: "/implement ", ticket: true },
+  { label: "Triage ticket", description: "Investigate a ticket and clarify the scope.", prompt: "/triage ", ticket: true, skill: "mattpocock-skills:triage" },
+  { label: "Implement ticket", description: "Build a ticket with tests and code review.", prompt: "/implement ", ticket: true, skill: "mattpocock-skills:implement" },
   { label: "Debug", description: "Investigate a bug and find its cause.", prompt: "/diagnosing-bugs " },
   { label: "Review changes", description: "Review the current uncommitted changes.", prompt: "/code-review Review the current uncommitted changes." },
 ] as const;
 
 export function conversationPrompt(preset: (typeof conversationPresets)[number], ticket: string) {
-  return 'ticket' in preset ? preset.prompt + ticket.trim() : preset.prompt;
+  const prompt = 'ticket' in preset ? preset.prompt + ticket.trim() : preset.prompt;
+  return 'skill' in preset
+    ? `${prompt}\n\nUse the $${preset.skill} skill. Read its SKILL.md and follow its workflow for this ticket. State which skill you loaded before starting. If the skill is unavailable, stop and report that instead of proceeding without it.`
+    : prompt;
 }
 
 export function newConversationWorktree(repo: string, suffix: string) {

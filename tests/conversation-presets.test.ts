@@ -10,8 +10,8 @@ const projects: T3Project[] = [
 
 describe("conversation starters", () => {
   it("carries a ticket reference or full description into ticket drafts without leaking it to other actions", () => {
-    expect(conversationPrompt(conversationPresets[1], ' #42 ')).toBe('/triage #42');
-    expect(conversationPrompt(conversationPresets[2], 'Fix login\n\nAccept expired sessions')).toBe('/implement Fix login\n\nAccept expired sessions');
+    expect(conversationPrompt(conversationPresets[1], ' #42 ')).toMatch(/^\/triage #42\n\nUse the \$mattpocock-skills:triage skill\./);
+    expect(conversationPrompt(conversationPresets[2], 'Fix login\n\nAccept expired sessions')).toMatch(/^\/implement Fix login\n\nAccept expired sessions\n\nUse the \$mattpocock-skills:implement skill\./);
     expect(conversationPrompt(conversationPresets[0], '#42')).toBe('');
   });
   it("automatically names a new branch and worktree outside the current worktree", () => {
