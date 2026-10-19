@@ -37,6 +37,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it.each([false, true])('sends uploaded image attachments without requiring text (legacy=%s)', async legacy => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [{ kind: 'snapshot', snapshot: {
+      ...(legacy ? { snapshotSequence: 1 } : { schemaVersion: 2 }), projects: [], threads: [],
+    } }] });
+    const attachment = { type: 'image' as const, id: 'uploaded-image', name: 'screenshot.png', mimeType: 'image/png', sizeBytes: 4 };
+    const sending = client.sendMessage({ id: 'one', modelSelection: { instanceId: 'codex', model: 'test' } } as any, '', [attachment]);
+    const command = socket.sent.at(-1);
+    expect(legacy ? command.payload.message : command.payload).toMatchObject({ text: '', attachments: [attachment] });
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: {} } });
+    await sending;
+  });
   it("creates a placeholder the legacy server allows an automatic title to replace", async () => {
     const client = new T3Client(async () => "ws://127.0.0.1/ws");
     clients.push(client);

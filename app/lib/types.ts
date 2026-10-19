@@ -78,6 +78,13 @@ export interface T3Thread {
   runtimeMode: string;
   interactionMode: string;
 }
+export interface T3ImageAttachment {
+  type: "image";
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+}
 export interface T3Message {
   id: string;
   runId?: string | null;
@@ -87,6 +94,7 @@ export interface T3Message {
   text: string;
   streaming: boolean;
   createdAt: string;
+  attachments?: T3ImageAttachment[];
 }
 export interface T3Request {
   id: string;

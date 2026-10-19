@@ -1,4 +1,4 @@
-import type { T3Project, T3Thread, T3Projection } from "./types";
+import type { T3Project, T3Thread, T3Projection, T3ImageAttachment } from "./types";
 
 type Json = Record<string, any>;
 type Pending = {
@@ -366,7 +366,7 @@ export class T3Client {
   dispatch(command: Json) {
     return this.call("orchestration.dispatchCommand", command);
   }
-  sendMessage(thread: T3Thread, text: string) {
+  sendMessage(thread: T3Thread, text: string, attachments: T3ImageAttachment[] = []) {
     const titleSeed = text.trim() && (thread.title === "New conversation" || thread.title === "New thread") && (this.untitledThreads.has(thread.id) || (
       this.projection?.thread.id === thread.id &&
       !this.projection.messages.some(message => message.role === "user")
@@ -375,7 +375,7 @@ export class T3Client {
       type: "thread.turn.start",
       commandId: crypto.randomUUID(),
       threadId: thread.id,
-      message: { messageId: crypto.randomUUID(), role: "user", text, attachments: [] },
+      message: { messageId: crypto.randomUUID(), role: "user", text, attachments },
       modelSelection: thread.modelSelection,
       ...titleSeed,
       runtimeMode: thread.runtimeMode,
@@ -390,7 +390,7 @@ export class T3Client {
       creationSource: "web",
       text,
       ...titleSeed,
-      attachments: [],
+      attachments,
       dispatchMode: {
         type: thread.activeRunId ? "queue_after_active" : "start_immediately",
       },

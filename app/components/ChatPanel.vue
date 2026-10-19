@@ -19,11 +19,12 @@ import {
   GitBranch,
 } from "lucide-vue-next";
 import { conversationTurns } from '~/lib/conversation-turns';
+import { imageMimeTypes, uploadChatImage, validateChatImages } from '~/lib/chat-images';
 import { conversationDefaults, conversationPresets, conversationPrompt, newConversationWorktree } from '~/lib/conversation-presets';
 import { isThreadRunning, repositoryThreadKey, repositoryThreads, repositoryThreadSelection } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop, git } from "~/lib/native";
-import type { T3Thread, T3Project, T3Projection } from "~/lib/types";
+import type { T3Thread, T3Project, T3Projection, T3ImageAttachment } from "~/lib/types";
 const props = defineProps<{
   context: string;
   example: boolean;
@@ -76,6 +77,40 @@ const modelOptions = computed(() => {
   }));
 });
 const drafts = new Map<string, string>();
+type DraftImage = { id: string; file: File; preview: string; uploaded?: T3ImageAttachment };
+const imageDrafts = ref<Record<string, DraftImage[]>>({});
+const images = computed(() => imageDrafts.value[selectedId.value] || []);
+function pasteImages(event: ClipboardEvent) {
+  if (!connected.value || !thread.value || props.example || sending.value) return;
+  const files = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith('image/'));
+  if (!files.length) return;
+  event.preventDefault();
+  try {
+    validateChatImages([...images.value.map(image => image.file), ...files]);
+    imageDrafts.value[selectedId.value] = [...images.value, ...files.map(file => ({ id: crypto.randomUUID(), file, preview: URL.createObjectURL(file) }))];
+    const text = event.clipboardData?.getData('text/plain');
+    if (text) {
+      const input = composer.value;
+      const start = input?.selectionStart ?? prompt.value.length;
+      const end = input?.selectionEnd ?? start;
+      prompt.value = prompt.value.slice(0, start) + text + prompt.value.slice(end);
+      void nextTick(() => input?.setSelectionRange(start + text.length, start + text.length));
+    }
+    error.value = '';
+  } catch (e) { error.value = String(e); }
+}
+function removeImage(id: string, threadId = selectedId.value) {
+  const draft = imageDrafts.value[threadId] || [];
+  const removed = draft.find(image => image.id === id);
+  if (removed) URL.revokeObjectURL(removed.preview);
+  imageDrafts.value[threadId] = draft.filter(image => image.id !== id);
+}
+async function loadImage(attachment: T3ImageAttachment) {
+  if (!imageMimeTypes.includes(attachment.mimeType)) throw new Error('Unsupported image.');
+  const { relativeUrl } = await client.call('assets.createUrl', { resource: { _tag: 'attachment', attachmentId: attachment.id } });
+  const bytes = await invoke<number[]>('t3_image_load', { relativeUrl });
+  return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: attachment.mimeType }));
+}
 const composer = ref<HTMLTextAreaElement>();
 const conversationBody = ref<HTMLElement>();
 let followMessages = true;
@@ -153,19 +188,26 @@ async function pair() {
   }
 }
 async function send() {
-  if (!thread.value || !prompt.value.trim() || sending.value) return;
+  if (!thread.value || (!prompt.value.trim() && !images.value.length) || sending.value) return;
   sending.value = true;
   error.value = "";
   const submittedThread = thread.value;
   const submittedText = prompt.value;
+  const submittedImages = [...images.value];
   try {
+    for (const image of submittedImages) {
+      image.uploaded ||= await uploadChatImage(image.file, (tag, payload) => client.call(tag, payload),
+        (relativeUrl, mimeType, bytes) => invoke<void>('t3_image_upload', { relativeUrl, mimeType, bytes }));
+    }
     await client.sendMessage(
       submittedThread,
       submittedText +
         (props.context
           ? `\n\nSelected Git context:\n\n${props.context}`
           : ""),
+      submittedImages.map(image => image.uploaded!),
     );
+    for (const image of submittedImages) removeImage(image.id, submittedThread.id);
     drafts.delete(submittedThread.id);
     if (
       selectedId.value === submittedThread.id &&
@@ -343,6 +385,7 @@ watch([() => props.repo, connected, matchingThreads], () => {
   if (next !== selectedId.value) select(next, false);
 }, { immediate: true });
 onUnmounted(() => {
+  for (const draft of Object.values(imageDrafts.value)) for (const image of draft) URL.revokeObjectURL(image.preview);
   client.disconnect();
 });
 defineExpose({
@@ -419,6 +462,9 @@ defineExpose({
         </div>
         <template v-for="turn in turns" :key="turn.id">
           <div v-for="message in turn.users" :key="message.id" class="message user">
+            <template v-for="attachment in message.attachments || []" :key="attachment.id">
+              <ChatImage v-if="attachment.type === 'image'" :attachment="attachment" :load="loadImage" />
+            </template>
             <ChatMarkdown :text="message.text" />
           </div>
           <details v-if="turn.work.length || turn.activities.length" class="work-details">
@@ -495,6 +541,12 @@ defineExpose({
       </button>
     </div>
     <div class="composer">
+      <div v-if="images.length" class="pasted-images" aria-label="Attached images">
+        <figure v-for="image in images" :key="image.id">
+          <img :src="image.preview" :alt="image.file.name || 'Pasted image'" />
+          <button type="button" class="icon-button" :aria-label="`Remove ${image.file.name || 'pasted image'}`" :disabled="sending" @click="removeImage(image.id)"><X :size="13" /></button>
+        </figure>
+      </div>
       <div v-if="connected && thread && !example" class="agent-status" role="status" aria-live="polite">
         <LoaderCircle v-if="(busy || sending) && !requests.length" class="spin" :size="13" />
         <ShieldCheck v-else-if="requests.length" :size="13" />
@@ -519,6 +571,7 @@ defineExpose({
         placeholder="Give an instruction…"
         aria-label="Agent instruction"
         @keydown.ctrl.enter.prevent="send"
+        @paste="pasteImages"
       />
       <div class="composer-footer">
         <span
@@ -537,7 +590,7 @@ defineExpose({
           class="send-button"
           aria-label="Send instruction"
           :disabled="
-            !connected || !thread || !prompt.trim() || sending || example
+            !connected || !thread || (!prompt.trim() && !images.length) || sending || example
           "
           @click="send"
         >
@@ -639,6 +692,10 @@ defineExpose({
 </template>
 
 <style scoped>
+.pasted-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.pasted-images figure { position: relative; margin: 0; }
+.pasted-images img { display: block; width: 72px; height: 64px; object-fit: cover; border: 1px solid var(--line); border-radius: 6px; }
+.pasted-images button { position: absolute; top: 2px; right: 2px; padding: 2px; background: #101114dd; }
 .chat-panel { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
 .conversation-body .message p { font-size: 12px; line-height: 1.75; color: #d4d7df; }
 .composer textarea { font-size: 12px; line-height: 1.6; }

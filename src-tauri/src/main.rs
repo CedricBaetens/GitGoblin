@@ -4,6 +4,7 @@ mod git;
 mod devops;
 mod preferences;
 mod shell;
+mod t3_images;
 use serde_json::{json, Value};
 use std::{
     sync::{Arc, Mutex, RwLock},
@@ -217,6 +218,18 @@ fn t3_disconnect(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn t3_image_upload(relative_url: String, mime_type: String, bytes: Vec<u8>, state: State<'_, AppState>) -> Result<(), String> {
+    let (origin, _) = state.t3.lock().map_err(|e| e.to_string())?.clone().ok_or("Pair with T3 Code first.")?;
+    t3_images::upload(&origin, &relative_url, &mime_type, bytes).await
+}
+
+#[tauri::command]
+async fn t3_image_load(relative_url: String, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+    let (origin, _) = state.t3.lock().map_err(|e| e.to_string())?.clone().ok_or("Pair with T3 Code first.")?;
+    t3_images::load(&origin, &relative_url).await
+}
+
+#[tauri::command]
 fn t3_restore(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let mut session = state.t3.lock().map_err(|e| e.to_string())?;
     if session.is_none() {
@@ -332,6 +345,8 @@ fn main() {
             t3_discover,
             t3_pair,
             t3_ticket,
+            t3_image_upload,
+            t3_image_load,
             t3_disconnect,
             t3_restore,
             repositories_load,
