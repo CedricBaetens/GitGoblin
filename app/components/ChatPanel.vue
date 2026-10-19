@@ -16,7 +16,7 @@ import {
   CircleAlert,
   Wrench,
 } from "lucide-vue-next";
-import { chatActivities } from '~/lib/chat-activity';
+import { conversationTurns } from '~/lib/conversation-turns';
 import { visibleThreads } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop } from "~/lib/native";
@@ -95,11 +95,11 @@ const requests = computed(
 const connected = computed(() => state.value === "connected");
 const streaming = computed(() => messages.value.some(message => message.role === 'assistant' && message.streaming));
 const busy = computed(() => !!thread.value?.activeRunId || ['starting', 'running', 'busy'].includes(thread.value?.status || '') || streaming.value);
-const activities = computed(() => chatActivities(projection.value, thread.value?.activeRunId));
+const turns = computed(() => conversationTurns(projection.value, busy.value ? thread.value?.activeRunId || 'active' : null));
 const activityStatus = computed(() => sending.value ? 'Sending instruction…' : requests.value.length ? 'Waiting for approval'
   : streaming.value ? 'Responding…' : busy.value ? 'Working…'
   : thread.value?.status === 'error' ? 'Task failed' : 'Ready');
-watch(activities, () => void scrollToLatest(), { flush: 'post' });
+watch(turns, () => void scrollToLatest(), { flush: 'post' });
 const matchingThreads = computed(() =>
   threads.value.filter(
     (t) =>
@@ -339,26 +339,29 @@ defineExpose({
           <MessageSquare :size="26" />
           <p>Select a conversation in the left sidebar to review its work.</p>
         </div>
-        <div
-          v-for="message in messages"
-          :key="message.id"
-          class="message"
-          :class="{ user: message.role === 'user' }"
-        >
-          <span class="message-role"
-            >{{ message.role
-            }}<span v-if="message.streaming" class="streaming-label"><LoaderCircle class="spin" :size="11" />Live</span></span>
-          <p class="message-text">{{ message.text }}<span v-if="message.streaming" class="streaming-cursor" aria-hidden="true" /></p>
-        </div>
-        <div v-if="activities.length" class="chat-activities" aria-label="Recent agent activity">
-          <div v-for="activity in activities" :key="activity.id" class="chat-activity" :title="activity.title">
-            <CircleAlert v-if="activity.status === 'failed' || activity.status === 'error'" :size="13" class="activity-error" />
-            <Check v-else-if="activity.status === 'completed'" :size="13" class="activity-done" />
-            <LoaderCircle v-else-if="busy && ['running', 'pending', 'inProgress', 'in_progress'].includes(activity.status)" :size="13" class="spin" />
-            <Wrench v-else :size="13" />
-            <span>{{ activity.title }}</span>
+        <template v-for="turn in turns" :key="turn.id">
+          <div v-for="message in turn.users" :key="message.id" class="message user">
+            <p class="message-text">{{ message.text }}</p>
           </div>
-        </div>
+          <details v-if="turn.work.length || turn.activities.length" class="work-details">
+            <summary>{{ turn.summary }}<ChevronRight :size="13" /></summary>
+            <div class="work-content">
+              <div v-for="message in turn.work" :key="message.id" class="message">
+                <p class="message-text">{{ message.text }}<span v-if="message.streaming" class="streaming-cursor" aria-hidden="true" /></p>
+              </div>
+              <div v-for="activity in turn.activities" :key="activity.id" class="chat-activity" :title="activity.title">
+                <CircleAlert v-if="activity.status === 'failed' || activity.status === 'error'" :size="13" class="activity-error" />
+                <Check v-else-if="activity.status === 'completed'" :size="13" class="activity-done" />
+                <LoaderCircle v-else-if="busy && ['running', 'pending', 'inProgress', 'in_progress'].includes(activity.status)" :size="13" class="spin" />
+                <Wrench v-else :size="13" />
+                <span>{{ activity.title }}</span>
+              </div>
+            </div>
+          </details>
+          <div v-if="turn.final" class="message final-message">
+            <p class="message-text">{{ turn.final.text }}<span v-if="turn.final.streaming" class="streaming-cursor" aria-hidden="true" /></p>
+          </div>
+        </template>
         <div v-for="request in requests" :key="request.id" class="approval">
           <strong><ShieldCheck :size="15" />{{ request.kind }}</strong>
           <pre>{{
@@ -566,7 +569,13 @@ defineExpose({
 
 <style scoped>
 .agent-status { display: flex; align-items: center; gap: 7px; min-height: 26px; margin-bottom: 5px; color: #9baed4; font-size: 11px; }
-.chat-activities { border-left: 1px solid var(--line); margin: 8px 0 16px 5px; padding-left: 10px; }
+.work-details { margin: 8px 0 12px; color: #8e9bb4; }
+.work-details summary { display: flex; align-items: center; gap: 5px; width: fit-content; padding: 8px 0; cursor: pointer; font-size: 12px; list-style: none; }
+.work-details summary::-webkit-details-marker { display: none; }
+.work-details[open] summary svg { transform: rotate(90deg); }
+.work-details summary:hover { color: #c1c9dc; }
+.work-content { border-left: 1px solid var(--line); padding-left: 12px; margin: 4px 0 12px; }
+.final-message { border-top: 1px solid var(--line); padding-top: 12px; }
 .chat-activity { display: flex; align-items: center; gap: 7px; min-height: 25px; font-size: 11px; color: #8e9bb4; }
 .chat-activity svg { flex-shrink: 0; }
 .chat-activity span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

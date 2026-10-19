@@ -15,6 +15,7 @@ import type {
 export function useWorkbench() {
   const repo = ref(""),
     recent = ref<string[]>([]),
+    favorites = ref<string[]>([]),
     snapshot = ref<Snapshot>(),
     commits = ref<Commit[]>([]);
   const historyLoading = ref(false), historyHasMore = ref(false);
@@ -206,32 +207,32 @@ export function useWorkbench() {
         title: "Open a Git repository",
       }));
     if (typeof result !== "string") return;
-    generation++;
-    historyGeneration++;
-    historyLoading.value = false;
-    historyHasMore.value = false;
-    selectedCommit.value = undefined;
-    historyDiff.value = "";
-    diffGeneration++;
-    diffCache.clear();
-    warmupGeneration++;
-    repo.value = result;
-    example.value = false;
-    snapshot.value = undefined;
-    commits.value = [];
-    selected.value = "";
-    diff.value = { text: "", fingerprint: "" };
+    busy.value = true;
     error.value = "";
-    view.value = "changes";
-    mode.value = "working";
-    // Wait for an older poll to finish before starting a new repository read.
-    while (polling) await new Promise((resolve) => setTimeout(resolve, 30));
-    await refresh(true);
-    const loaded = snapshot.value as Snapshot | undefined;
-    if (loaded) {
+    try {
+      // Keep the current workspace intact until the replacement snapshot is ready.
+      while (polling) await new Promise((resolve) => setTimeout(resolve, 30));
+      const loaded = await git<Snapshot>({ repo: result, action: "snapshot" });
+      generation++;
+      historyGeneration++;
+      historyLoading.value = false;
+      historyHasMore.value = false;
+      selectedCommit.value = undefined;
+      historyDiff.value = "";
+      diffGeneration++;
+      diffCache.clear();
+      warmupGeneration++;
       repo.value = loaded.root;
+      example.value = false;
+      snapshot.value = loaded;
+      commits.value = [];
+      diff.value = { text: "", fingerprint: "" };
+      view.value = "changes";
+      mode.value = "working";
+      base.value = comparisonBase(loaded, base.value);
+      selected.value = currentFiles.value[0]?.path || "";
+      await Promise.all([loadDiff(), loadHistory(true)]);
       const repositoryRoot = loaded.repositoryRoot || loaded.worktrees[0]?.path || loaded.root;
-      const normalize = (path: string) => path.replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
       const worktreePaths = new Set(loaded.worktrees.map(tree => normalize(tree.path)));
       recent.value = [
         repositoryRoot,
@@ -243,6 +244,11 @@ export function useWorkbench() {
       } catch (e) {
         error.value = `Repository opened, but history could not be saved: ${e}`;
       }
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      busy.value = false;
+      void warmDiffs();
     }
   }
   function showExample() {
@@ -363,6 +369,62 @@ export function useWorkbench() {
       }
     }
   });
+  const normalize = (path: string) => path.replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
+  const repositoryNames = ref<Record<string, string>>({});
+  const nameSaving = ref(false);
+  const repositoryName = (path: string) => repositoryNames.value[normalize(path)] || path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) || 'GitGoblin';
+  const repositoryAlias = (path: string) => repositoryNames.value[normalize(path)] || '';
+  async function renameRepository(path: string, name: string) {
+    if (nameSaving.value) return false;
+    nameSaving.value = true;
+    const next = { ...repositoryNames.value };
+    if (name.trim()) next[normalize(path)] = name.trim();
+    else delete next[normalize(path)];
+    try {
+      if (desktop()) await invoke("repository_names_save", { names: next });
+      else localStorage.setItem("gitgoblin.repositoryNames", JSON.stringify(next));
+      repositoryNames.value = next;
+      return true;
+    } catch (e) {
+      error.value = `Could not save repository name: ${e}`;
+      return false;
+    } finally {
+      nameSaving.value = false;
+    }
+  }
+  onMounted(async () => {
+    try {
+      const saved = desktop() ? await invoke<Record<string, string>>("repository_names_load") : JSON.parse(localStorage.getItem("gitgoblin.repositoryNames") || "{}");
+      if (saved && typeof saved === 'object' && !Array.isArray(saved))
+        repositoryNames.value = Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    } catch (e) {
+      error.value = `Could not restore repository names: ${e}`;
+    }
+  });
+  const isFavorite = (path: string) => favorites.value.some(saved => normalize(saved) === normalize(path));
+  const favoriteSaving = ref(false);
+  async function toggleFavorite(path: string) {
+    if (favoriteSaving.value) return;
+    favoriteSaving.value = true;
+    const next = isFavorite(path) ? favorites.value.filter(saved => normalize(saved) !== normalize(path)) : [...favorites.value, path];
+    try {
+      if (desktop()) await invoke("favorites_save", { repositories: next });
+      else localStorage.setItem("gitgoblin.favorites", JSON.stringify(next));
+      favorites.value = next;
+    } catch (e) {
+      error.value = `Could not save favorite repositories: ${e}`;
+    } finally {
+      favoriteSaving.value = false;
+    }
+  }
+  onMounted(async () => {
+    try {
+      const saved = desktop() ? await invoke<string[] | null>("favorites_load") : JSON.parse(localStorage.getItem("gitgoblin.favorites") || "[]");
+      favorites.value = Array.isArray(saved) ? saved.filter((path): path is string => typeof path === 'string') : [];
+    } catch (e) {
+      error.value = `Could not restore favorite repositories: ${e}`;
+    }
+  });
   onMounted(async () => {
     try {
       const saved = desktop()
@@ -391,6 +453,14 @@ export function useWorkbench() {
   return {
     repo,
     recent,
+    favorites,
+    repositoryName,
+    repositoryAlias,
+    renameRepository,
+    nameSaving,
+    isFavorite,
+    toggleFavorite,
+    favoriteSaving,
     snapshot,
     commits,
     historyLoading,

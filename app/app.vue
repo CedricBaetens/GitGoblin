@@ -9,6 +9,8 @@ import {
   History,
   FolderOpen,
   FolderGit2,
+  Star,
+  Pencil,
   ChevronDown,
   ChevronRight,
   Plus,
@@ -49,6 +51,7 @@ const w = useWorkbench();
 const {
   repo,
   recent,
+  favorites,
   snapshot,
   commits,
   selected,
@@ -73,6 +76,19 @@ const {
 } = w;
 const filesAsTree = ref(true);
 const repositoryMenu = ref<HTMLDivElement>();
+const renamePath = ref(''), renameName = ref('');
+const renameInput = ref<HTMLInputElement>();
+async function startRepositoryRename(path: string) {
+  repositoryMenu.value?.hidePopover();
+  renamePath.value = path;
+  renameName.value = w.repositoryAlias(path);
+  await nextTick();
+  renameInput.value?.focus();
+  renameInput.value?.select();
+}
+async function saveRepositoryName() {
+  if (await w.renameRepository(renamePath.value, renameName.value)) renamePath.value = '';
+}
 type SidebarItem = { label: string; disabled?: boolean; run: () => unknown };
 const sidebarMenu = ref<{ open: (event: MouseEvent | KeyboardEvent, items: SidebarItem[]) => void; close: () => void }>();
 const copyItem = (label: string, text: string): SidebarItem => ({ label, run: () => navigator.clipboard.writeText(text) });
@@ -134,7 +150,7 @@ const threads = ref<T3Thread[]>([]),
 const normalized = (value: string) =>
   value.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
 const repoName = computed(
-  () => repo.value.replaceAll("\\", "/").split("/").at(-1) || "GitGoblin",
+  () => w.repositoryName(snapshot.value?.repositoryRoot || repo.value),
 );
 const localBranches = computed(
   () =>
@@ -626,6 +642,11 @@ watch(amend, async (value) => {
           /></svg
         ><span>gitgoblin</span>
       </div>
+      <nav v-if="favorites.length" class="favorite-tabs" aria-label="Favorite repositories">
+        <button v-for="path in favorites" :key="path" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
+          <Star :size="12" fill="currentColor" /><span>{{ w.repositoryName(path) }}</span>
+        </button>
+      </nav>
       <div class="titlebar-context">
         <button class="repository-switch" popovertarget="repository-menu" aria-label="Switch repository" :disabled="busy" :title="repo || 'Switch repository'">
           <FolderGit2 :size="15" /><strong>{{ snapshot ? repoName : 'Open repository' }}</strong><ChevronDown :size="12" />
@@ -634,10 +655,14 @@ watch(amend, async (value) => {
       </div>
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
         <div class="repository-menu-heading">Recent repositories</div>
-        <button v-for="path in recent" :key="path" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'true' : undefined" @click="chooseRepository(path)">
-          <FolderGit2 :size="16" /><span><strong>{{ path.replaceAll('\\', '/').split('/').at(-1) }}</strong><small>{{ path }}</small></span><Check v-if="normalized(path) === normalized(snapshot?.repositoryRoot || repo)" :size="14" />
-        </button>
-        <p v-if="!recent.length" class="nav-hint">Opened repositories will appear here.</p>
+        <div v-for="path in [...new Set([...favorites, ...recent])]" :key="path" class="repository-menu-row">
+          <button :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'true' : undefined" @click="chooseRepository(path)">
+            <FolderGit2 :size="16" /><span><strong>{{ w.repositoryName(path) }}</strong><small>{{ path }}</small></span><Check v-if="normalized(path) === normalized(snapshot?.repositoryRoot || repo)" :size="14" />
+          </button>
+          <button class="icon-button" :aria-label="`Rename ${w.repositoryName(path)}`" title="Rename repository" @click="startRepositoryRename(path)"><Pencil :size="14" /></button>
+          <button class="favorite-toggle icon-button" :class="{ favorited: w.isFavorite(path) }" :disabled="w.favoriteSaving.value" :aria-label="`${w.isFavorite(path) ? 'Unfavorite' : 'Favorite'} ${path}`" :aria-pressed="w.isFavorite(path)" @click="w.toggleFavorite(path)"><Star :size="15" :fill="w.isFavorite(path) ? 'currentColor' : 'none'" /></button>
+        </div>
+        <p v-if="!recent.length && !favorites.length" class="nav-hint">Opened repositories will appear here.</p>
         <button class="repository-menu-open" :disabled="busy" @click="chooseRepository()"><Plus :size="16" />Open repository...<kbd>Ctrl O</kbd></button>
       </div>
           <div v-if="snapshot" class="toolbar-actions" aria-label="Git actions">
@@ -919,7 +944,7 @@ watch(amend, async (value) => {
             @click="w.openRepo(path)"
           >
             <FolderGit2 :size="15" /><span>{{
-              path.replaceAll("\\", "/").split("/").at(-1)
+              w.repositoryName(path)
             }}</span>
           </button>
           <p v-if="!recent.length" class="nav-hint">
@@ -1294,6 +1319,15 @@ watch(amend, async (value) => {
       @selection="selectedThreadId = $event"
     />
     <Teleport to="body">
+      <div v-if="renamePath" class="modal-backdrop" @click.self="!w.nameSaving.value && (renamePath = '')" @keydown.esc="!w.nameSaving.value && (renamePath = '')">
+        <form class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-repository-title" @submit.prevent="saveRepositoryName">
+          <div class="modal-heading"><h2 id="rename-repository-title">Rename repository</h2><button type="button" class="icon-button" aria-label="Close rename dialog" :disabled="w.nameSaving.value" @click="renamePath = ''"><X :size="18" /></button></div>
+          <p>{{ renamePath }}</p>
+          <label>Display name<input ref="renameInput" v-model="renameName" :disabled="w.nameSaving.value" :placeholder="renamePath.replaceAll('\\', '/').split('/').at(-1)" /></label>
+          <p>Leave empty to use the folder name.</p>
+          <div class="modal-footer"><button type="button" :disabled="w.nameSaving.value" @click="renamePath = ''">Cancel</button><button type="submit" class="primary" :disabled="w.nameSaving.value">Save</button></div>
+        </form>
+      </div>
       <div
         v-if="dialog"
         class="modal-backdrop"

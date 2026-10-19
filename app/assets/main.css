@@ -1719,13 +1719,23 @@ small {
 }
 .repository-menu::backdrop { background: transparent; }
 .repository-menu-heading { padding: 9px 10px; font-size: 10px; color: #7e8ba4; }
-.repository-menu > button { width: 100%; justify-content: flex-start; text-align: left; padding: 9px 10px; }
-.repository-menu > button > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.repository-menu > button, .repository-menu-row > button:first-child { width: 100%; justify-content: flex-start; text-align: left; padding: 9px 10px; }
+.repository-menu-row > button:first-child > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .repository-menu strong { font-size: 12px; font-weight: 500; color: #d0d7e6; }
 .repository-menu small { font-size: 10px; color: #7e8ba4; }
 .repository-menu strong, .repository-menu small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repository-menu > button[aria-current] { background: #262e40; }
+.repository-menu-row > button[aria-current] { background: #262e40; }
 .repository-menu > .repository-menu-open { margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0; font-size: 11px; }
 .repository-menu kbd { margin-left: auto; }
 
 .diff-scroll, .file-list, .sidebar-scroll { overflow-anchor: none; }
+
+.repository-menu-row { display: flex; align-items: center; gap: 4px; }
+.repository-menu-row > button:first-child { flex: 1; min-width: 0; }
+.favorite-toggle { flex-shrink: 0; }
+.favorite-toggle.favorited { color: #e7ce8d; }
+.favorite-tabs { display: flex; align-self: stretch; align-items: stretch; gap: 3px; min-width: 0; max-width: 35%; overflow-x: auto; scrollbar-width: thin; }
+.favorite-tabs button { flex-shrink: 0; max-width: 160px; padding: 0 10px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 11px; color: #9ba5bb; }
+.favorite-tabs button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.favorite-tabs button svg { flex-shrink: 0; color: #d6be80; }
+.favorite-tabs button[aria-current] { color: #e0e6f4; background: #252a37; border-bottom-color: #a4b3ed; }

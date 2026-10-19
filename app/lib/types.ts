@@ -79,6 +79,9 @@ export interface T3Thread {
 }
 export interface T3Message {
   id: string;
+  runId?: string | null;
+  turnId?: string | null;
+  updatedAt?: string;
   role: string;
   text: string;
   streaming: boolean;

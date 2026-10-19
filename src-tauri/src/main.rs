@@ -230,6 +230,26 @@ fn repositories_save(app: tauri::AppHandle, repositories: Vec<String>) -> Result
 }
 
 #[tauri::command]
+fn favorites_load(app: tauri::AppHandle) -> Result<Option<Vec<String>>, String> {
+    preferences::load_favorites(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+fn favorites_save(app: tauri::AppHandle, repositories: Vec<String>) -> Result<(), String> {
+    preferences::save_favorites(&app.path().app_data_dir().map_err(|e| e.to_string())?, &repositories)
+}
+
+#[tauri::command]
+fn repository_names_load(app: tauri::AppHandle) -> Result<std::collections::HashMap<String, String>, String> {
+    preferences::load_repository_names(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+fn repository_names_save(app: tauri::AppHandle, names: std::collections::HashMap<String, String>) -> Result<(), String> {
+    preferences::save_repository_names(&app.path().app_data_dir().map_err(|e| e.to_string())?, &names)
+}
+
+#[tauri::command]
 fn open_editor(repo: String, path: String) -> Result<(), String> {
     let root = std::fs::canonicalize(repo).map_err(|e| e.to_string())?;
     let target = std::fs::canonicalize(root.join(path)).map_err(|e| e.to_string())?;
@@ -301,6 +321,10 @@ fn main() {
             t3_restore,
             repositories_load,
             repositories_save,
+            favorites_load,
+            favorites_save,
+            repository_names_load,
+            repository_names_save,
             open_editor
         ])
         .run(tauri::generate_context!())
