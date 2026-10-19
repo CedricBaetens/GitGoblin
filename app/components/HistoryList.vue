@@ -3,7 +3,7 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { commitGraph } from '~/lib/graph';
 import type { Commit } from '~/lib/types';
 const props = defineProps<{ commits: Commit[]; selected?: string; loading: boolean; hasMore: boolean }>();
-const emit = defineEmits<{ select: [commit: Commit]; loadMore: [] }>();
+const emit = defineEmits<{ select: [commit: Commit]; loadMore: []; context: [event: MouseEvent | KeyboardEvent, commit: Commit] }>();
 const list = ref<HTMLElement>();
 const scroll = ref(0), height = ref(400);
 const rowHeight = 22, headerHeight = 24;
@@ -47,7 +47,7 @@ function navigate(event: KeyboardEvent) {
     <div class="history-columns"><span>GRAPH</span><span>COMMIT</span><span>AUTHOR</span><span>HASH</span><span>DATE</span></div>
     <div :style="{ height: `${start * rowHeight}px` }" aria-hidden="true" />
     <button v-for="(commit, i) in visible" :key="commit.id" class="commit-row" :class="{ active: selected === commit.id }"
-      :aria-current="selected === commit.id ? 'true' : undefined" @click="emit('select', commit)">
+      :aria-current="selected === commit.id ? 'true' : undefined" aria-haspopup="menu" @contextmenu="emit('context', $event, commit)" @keydown.shift.f10.prevent="emit('context', $event, commit)" @keydown.context-menu.prevent="emit('context', $event, commit)" @click="emit('select', commit)">
       <HistoryGraph :row="graph[start + i]!" />
       <span class="commit-subject" :title="`${commit.refs ? commit.refs + '\n' : ''}${commit.subject}`"><span v-if="commit.refs" class="ref-label">{{ commit.refs }}</span>{{ commit.subject }}</span>
       <span class="commit-author" :title="commit.author"><span class="commit-avatar">{{ commit.author.split(' ').map(part => part[0]).slice(0, 2).join('') }}</span>{{ commit.author }}</span>

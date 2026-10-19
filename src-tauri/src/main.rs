@@ -2,6 +2,7 @@
 
 mod git;
 mod preferences;
+mod shell;
 use serde_json::{json, Value};
 use std::{
     sync::{Arc, Mutex, RwLock},
@@ -250,12 +251,18 @@ fn repository_names_save(app: tauri::AppHandle, names: std::collections::HashMap
 }
 
 #[tauri::command]
+fn full_path(repo: String, path: String) -> Result<String, String> {
+    Ok(shell::worktree_path(&repo, &path)?.to_string_lossy().trim_start_matches("\\\\?\\").to_string())
+}
+
+#[tauri::command]
+fn reveal_path(repo: String, path: String) -> Result<(), String> {
+    shell::reveal(&shell::worktree_path(&repo, &path)?)
+}
+
+#[tauri::command]
 fn open_editor(repo: String, path: String) -> Result<(), String> {
-    let root = std::fs::canonicalize(repo).map_err(|e| e.to_string())?;
-    let target = std::fs::canonicalize(root.join(path)).map_err(|e| e.to_string())?;
-    if !target.starts_with(root) {
-        return Err("File must be within the worktree.".into());
-    }
+    let target = std::fs::canonicalize(shell::worktree_path(&repo, &path)?).map_err(|e| e.to_string())?;
     // Launch an editor executable directly, never a user-controlled shell command.
     #[cfg(windows)]
     let editor =
@@ -325,7 +332,9 @@ fn main() {
             favorites_save,
             repository_names_load,
             repository_names_save,
-            open_editor
+            open_editor,
+            full_path,
+            reveal_path
         ])
         .run(tauri::generate_context!())
         .expect("Could not start GitGoblin");

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, nextTick, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { ChevronRight, ChevronDown, Folder, FileCode2 } from "lucide-vue-next";
 import { fileChange, fileTree, type FileNode } from "~/lib/files";
 import type { FileStatus } from "~/lib/types";
 import { selectFiles } from '~/lib/file-selection';
+import type { ContextMenuHandle, ContextMenuItem } from '~/lib/context-menu';
 
-const props = defineProps<{ files: FileStatus[]; tree: boolean; selected: string; mode: string; editable?: boolean }>();
-const emit = defineEmits<{ select: [path: string]; toggleStage: [path: string]; toggleFolder: [path: string]; toggleSelection: [paths: string[]] }>();
+const props = defineProps<{ files: FileStatus[]; tree: boolean; selected: string; mode: string; editable?: boolean; nativeActions?: boolean }>();
+const emit = defineEmits<{ select: [path: string]; toggleStage: [path: string]; toggleFolder: [path: string]; toggleSelection: [paths: string[]]; openEditor: [path: string]; reveal: [path: string]; copyFullPath: [path: string]; error: [message: string] }>();
 const picked = ref(new Set<string>(props.selected ? [props.selected] : []));
 let anchor = '';
 const selectedPaths = computed(() => props.files.filter(file => picked.value.has(file.path)).map(file => file.path));
@@ -22,59 +23,27 @@ watch(() => props.files, files => {
   picked.value = new Set([...picked.value].filter(path => valid.has(path)));
 });
 watch(() => props.selected, path => { if (!path) { picked.value = new Set(); anchor = ''; } });
-const menu = ref<HTMLDivElement>();
-const menuRow = ref<{ path: string; file?: FileStatus }>();
-const menuError = ref("");
-let menuTrigger: HTMLElement | undefined;
-const canStage = computed(() => props.editable && menuRow.value && !props.files.some((file) =>
-  file.conflict && (menuRow.value!.file ? picked.value.has(file.path) : file.path.startsWith(`${menuRow.value!.path}/`)),
-));
-async function openMenu(event: MouseEvent | KeyboardEvent, row: { path: string; file?: FileStatus }) {
-  event.preventDefault();
+const menu = ref<ContextMenuHandle>();
+function openMenu(event: MouseEvent | KeyboardEvent, row: { path: string; file?: FileStatus }) {
   if (row.file && !picked.value.has(row.path)) { picked.value = new Set([row.path]); anchor = row.path; }
-  menuTrigger = event.currentTarget as HTMLElement;
-  menuRow.value = row;
-  menuError.value = "";
-  await nextTick();
-  if (!menu.value) return;
-  const bounds = menuTrigger.getBoundingClientRect();
-  const mouse = event instanceof MouseEvent && (event.clientX !== 0 || event.clientY !== 0);
-  const x = mouse ? event.clientX : bounds.left;
-  const y = mouse ? event.clientY : bounds.bottom;
-  menu.value.showPopover();
-  menu.value.style.left = `${Math.max(4, Math.min(x, window.innerWidth - menu.value.offsetWidth - 4))}px`;
-  menu.value.style.top = `${Math.max(4, Math.min(y, window.innerHeight - menu.value.offsetHeight - 4))}px`;
-  menu.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  const canStage = props.editable && !props.files.some(file => file.conflict && (row.file ? picked.value.has(file.path) : file.path.startsWith(`${row.path}/`)));
+  const items: ContextMenuItem[] = [];
+  if (props.mode !== 'branch') items.push({
+    label: `${props.mode === 'staged' ? 'Unstage' : 'Stage'} ${row.file ? picked.value.size > 1 ? `${picked.value.size} selected files` : 'file' : 'folder'}`,
+    disabled: !canStage,
+    run: () => row.file ? emit('toggleSelection', selectedPaths.value) : emit('toggleFolder', row.path),
+  });
+  items.push(row.file ? { label: 'View changes', run: () => emit('select', row.path) }
+    : { label: `${collapsed.value.has(row.path) ? 'Expand' : 'Collapse'} folder`, run: () => toggle(row.path) });
+  items.push(
+    { label: row.file ? 'Open in editor' : 'Open folder in editor', separatorBefore: true, disabled: !props.nativeActions || !!row.file && fileChange(row.file, props.mode).kind === 'removed', run: () => emit('openEditor', row.path) },
+    { label: 'Reveal in Explorer', disabled: !props.nativeActions, run: () => emit('reveal', row.path) },
+    { label: 'Copy relative path', separatorBefore: true, run: () => navigator.clipboard.writeText(row.path) },
+    { label: 'Copy full path', disabled: !props.nativeActions, run: () => emit('copyFullPath', row.path) },
+  );
+  void menu.value?.open(event, items);
 }
-function closeMenu() {
-  menu.value?.hidePopover();
-  if (menuTrigger?.isConnected) menuTrigger.focus({ preventScroll: true });
-}
-async function menuAction(action: 'view' | 'stage' | 'toggle' | 'copy') {
-  const row = menuRow.value;
-  if (!row) return;
-  if (action === 'copy') {
-    try { await navigator.clipboard.writeText(row.path); }
-    catch { menuError.value = "Could not copy the path. Try again."; return; }
-  } else if (action === 'view') emit('select', row.path);
-  else if (action === 'toggle') toggle(row.path);
-  else if (canStage.value) {
-    if (row.file) emit('toggleSelection', selectedPaths.value);
-    else emit('toggleFolder', row.path);
-  }
-  closeMenu();
-}
-function menuKey(event: KeyboardEvent) {
-  if (event.key === 'Escape' || event.key === 'Tab') { closeMenu(); event.preventDefault(); return; }
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-  event.preventDefault();
-  const items = [...(menu.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])];
-  const current = items.indexOf(document.activeElement as HTMLButtonElement);
-  const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
-    : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-  items[index]?.focus();
-}
-watch(() => [props.files, props.tree, props.mode], () => menu.value?.hidePopover());
+watch(() => [props.files, props.tree, props.mode], () => menu.value?.close());
 const collapsed = ref(new Set<string>());
 const rows = computed(() => {
   if (!props.tree) return props.files.map((file) => ({
@@ -121,25 +90,13 @@ function toggle(path: string) {
       <button v-if="!row.file && mode !== 'branch'" class="folder-stage" :disabled="!editable" :aria-label="`${mode === 'staged' ? 'Unstage' : 'Stage'} folder ${row.path}`" @click="$emit('toggleFolder', row.path)">{{ mode === 'staged' ? 'Unstage' : 'Stage' }}</button>
     </li>
   </ul>
-  <div ref="menu" popover="auto" role="menu" :aria-label="`Actions for ${menuRow?.path || 'file'}`" class="file-context-menu" @keydown="menuKey" @contextmenu.prevent>
-    <template v-if="menuRow">
-      <button v-if="mode !== 'branch'" role="menuitem" :disabled="!canStage" @click="menuAction('stage')">{{ mode === 'staged' ? 'Unstage' : 'Stage' }} {{ menuRow.file ? picked.size > 1 ? `${picked.size} selected files` : 'file' : 'folder' }}</button>
-      <button v-if="menuRow.file" role="menuitem" @click="menuAction('view')">View changes</button>
-      <button v-if="!menuRow.file" role="menuitem" @click="menuAction('toggle')">{{ collapsed.has(menuRow.path) ? 'Expand' : 'Collapse' }} folder</button>
-      <button role="menuitem" @click="menuAction('copy')">Copy relative path</button>
-      <span v-if="menuError" role="alert">{{ menuError }}</span>
-    </template>
-  </div>
+  <ContextMenu ref="menu" @error="emit('error', $event)" />
 </template>
 
 <style scoped>
 .selection-actions { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 3px 5px; font-size: 10px; background: #1b202b; color: #b7c5df; }
 .selection-actions button { font-size: 10px; padding: 3px 6px; }
 .compact-files { user-select: none; }
-.file-context-menu { position: fixed; inset: auto; margin: 0; padding: 4px; min-width: 180px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px); overflow: auto; background: #1b202b; color: #d3dffa; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 28px #0008; }
-.file-context-menu button { display: flex; width: 100%; justify-content: flex-start; padding: 7px 10px; font-size: 11px; border-radius: 3px; }
-.file-context-menu button:focus-visible { outline: 1px solid #8ca5e7; outline-offset: -1px; background: #2a3244; }
-.file-context-menu span { display: block; max-width: 220px; padding: 6px 10px; color: #ee9c9c; font-size: 11px; }
 .file-entry { display: flex; align-items: center; }
 .tree-chevron-space { width: 11px; flex-shrink: 0; }
 .folder-stage { flex-shrink: 0; padding: 2px 5px; font-size: 9px; color: #93a4c9; margin-right: 3px; }

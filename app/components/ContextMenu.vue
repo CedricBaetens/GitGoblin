@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue';
-type Item = { label: string; disabled?: boolean; run: () => unknown };
+import type { ContextMenuItem as Item } from '~/lib/context-menu';
 const emit = defineEmits<{ error: [message: string] }>();
 const element = ref<HTMLDivElement>();
 const items = ref<Item[]>([]);
@@ -8,6 +8,7 @@ let trigger: HTMLElement | undefined;
 async function open(event: MouseEvent | KeyboardEvent, actions: Item[]) {
   event.preventDefault();
   trigger = event.currentTarget as HTMLElement;
+  if (!trigger.matches('button, [tabindex]')) trigger = trigger.querySelector<HTMLElement>('button, [tabindex]') || trigger;
   items.value = actions;
   const rect = trigger.getBoundingClientRect();
   const mouse = event instanceof MouseEvent && (event.clientX || event.clientY);
@@ -44,11 +45,18 @@ defineExpose({ open, close });
 </script>
 <template>
   <div ref="element" popover="auto" role="menu" aria-label="Sidebar actions" class="sidebar-context-menu" @keydown="navigate" @contextmenu.prevent>
-    <button v-for="item in items" :key="item.label" role="menuitem" :disabled="item.disabled" @click="choose(item)">{{ item.label }}</button>
+    <template v-for="item in items" :key="item.label">
+      <div v-if="item.separatorBefore" role="separator" class="menu-separator" />
+      <button role="menuitem" :disabled="item.disabled" :title="item.disabledReason" :class="{ 'destructive-action': item.danger }" @click="choose(item)">{{ item.label }}<small v-if="item.disabled && item.disabledReason">{{ item.disabledReason }}</small></button>
+    </template>
   </div>
 </template>
 <style scoped>
 .sidebar-context-menu { position: fixed; inset: auto; margin: 0; padding: 4px; min-width: 190px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px); overflow: auto; background: #1b202b; color: #d3dffa; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 28px #0008; }
-button { display: flex; width: 100%; justify-content: flex-start; padding: 7px 10px; font-size: 11px; border-radius: 3px; }
+button { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; justify-content: flex-start; padding: 7px 10px; font-size: 11px; border-radius: 3px; }
 button:focus-visible { outline: 1px solid #8ca5e7; outline-offset: -1px; background: #2a3244; }
+.menu-separator { height: 1px; margin: 4px 6px; background: var(--line); }
+button.destructive-action { color: #ef9ca7; }
+button.destructive-action:hover:not(:disabled), button.destructive-action:focus-visible { color: #ffb5bf; background: #c743511a; }
+small { font-size: 10px; font-weight: 400; white-space: normal; max-width: 240px; text-align: left; }
 </style>

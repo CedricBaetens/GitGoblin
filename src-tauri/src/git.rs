@@ -537,6 +537,13 @@ pub fn execute(req: Request) -> Result<Value, String> {
             branch(&repo, &req.target)?;
             json!(git(&repo, &["tag", "-d", &req.target])?)
         }
+        "rebase-onto" => {
+            let target = oid(&repo, &req.target)?;
+            if !status(&repo)?.is_empty() {
+                return Err("Commit or stash changes before rebasing.".into());
+            }
+            json!(git(&repo, &["rebase", &target])?)
+        }
         "merge" => {
             let target = oid(&repo, &req.target)?;
             json!(git(&repo, &["merge", "--no-edit", &target])?)
@@ -986,6 +993,73 @@ mod tests {
         assert!(execute(req).unwrap_err().contains("changed"));
         assert!(git(dir.path(), &["diff", "--cached"]).unwrap().is_empty());
     }
+    #[test]
+    fn rebases_current_branch_onto_local_and_remote_branches() {
+        for target in ["refs/heads/base", "refs/remotes/origin/base"] {
+            let dir = fixture();
+            let repo = dir.path();
+            git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+            git(repo, &["branch", "base"]).unwrap();
+            git(repo, &["switch", "-c", "feature"]).unwrap();
+            fs::write(repo.join("feature.txt"), "feature\n").unwrap();
+            git(repo, &["add", "."]).unwrap();
+            git(repo, &["commit", "-m", "feature"]).unwrap();
+            let original = git(repo, &["rev-parse", "HEAD"]).unwrap();
+            git(repo, &["switch", "base"]).unwrap();
+            fs::write(repo.join("base.txt"), "base\n").unwrap();
+            git(repo, &["add", "."]).unwrap();
+            git(repo, &["commit", "-m", "base"]).unwrap();
+            git(repo, &["update-ref", "refs/remotes/origin/base", "base"]).unwrap();
+            git(repo, &["switch", "feature"]).unwrap();
+            let mut req = request(repo, "rebase-onto");
+            req.target = target.into();
+            execute(req).unwrap();
+            assert_eq!(git(repo, &["branch", "--show-current"]).unwrap().trim(), "feature");
+            assert_ne!(git(repo, &["rev-parse", "HEAD"]).unwrap(), original);
+            git(repo, &["merge-base", "--is-ancestor", "base", "HEAD"]).unwrap();
+            assert!(repo.join("base.txt").exists() && repo.join("feature.txt").exists());
+            fs::write(repo.join("feature.txt"), "unsaved\n").unwrap();
+            let mut req = request(repo, "rebase-onto");
+            req.target = target.into();
+            assert!(execute(req).unwrap_err().contains("Commit or stash"));
+        }
+    }
+
+    #[test]
+    fn branch_switch_preserves_local_changes_and_rebase_conflicts_can_be_aborted() {
+        let dir = fixture();
+        let repo = dir.path();
+        fs::write(repo.join("file.txt"), "initial\n").unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "initial"]).unwrap();
+        git(repo, &["branch", "base"]).unwrap();
+        git(repo, &["switch", "-c", "feature"]).unwrap();
+        fs::write(repo.join("file.txt"), "feature\n").unwrap();
+        git(repo, &["commit", "-am", "feature"]).unwrap();
+        let original = git(repo, &["rev-parse", "HEAD"]).unwrap();
+        git(repo, &["switch", "base"]).unwrap();
+        fs::write(repo.join("file.txt"), "base\n").unwrap();
+        git(repo, &["commit", "-am", "base"]).unwrap();
+        let mut req = request(repo, "switch");
+        req.target = "feature".into();
+        execute(req).unwrap();
+        fs::write(repo.join("file.txt"), "local edits\n").unwrap();
+        let mut req = request(repo, "switch");
+        req.target = "base".into();
+        assert!(execute(req).is_err());
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "local edits\n");
+        fs::write(repo.join("file.txt"), "feature\n").unwrap();
+        let mut req = request(repo, "rebase-onto");
+        req.target = "base".into();
+        assert!(execute(req).is_err());
+        assert_eq!(execute(request(repo, "snapshot")).unwrap()["operation"], "rebase");
+        let mut req = request(repo, "abort");
+        req.mode = "rebase".into();
+        execute(req).unwrap();
+        assert_eq!(git(repo, &["rev-parse", "HEAD"]).unwrap(), original);
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "feature\n");
+    }
+
     #[test]
     fn lightweight_status_matches_snapshot_after_staging_and_unstaging() {
         let dir = fixture();

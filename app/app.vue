@@ -89,24 +89,31 @@ async function startRepositoryRename(path: string) {
 async function saveRepositoryName() {
   if (await w.renameRepository(renamePath.value, renameName.value)) renamePath.value = '';
 }
-type SidebarItem = { label: string; disabled?: boolean; run: () => unknown };
-const sidebarMenu = ref<{ open: (event: MouseEvent | KeyboardEvent, items: SidebarItem[]) => void; close: () => void }>();
+import type { ContextMenuHandle, ContextMenuItem as SidebarItem } from '~/lib/context-menu';
+const sidebarMenu = ref<ContextMenuHandle>();
 const copyItem = (label: string, text: string): SidebarItem => ({ label, run: () => navigator.clipboard.writeText(text) });
 function actionItem(label: string, action: string, preset: Record<string, string> = {}, disabled = false): SidebarItem {
   return { label, disabled: disabled || busy.value || example.value, run: () => ask(action, preset) };
+}
+async function switchBranch(branch: GitRef) {
+  if (branch.current || busy.value || example.value) return;
+  try {
+    await w.mutate('switch', { target: branch.name.replace('refs/heads/', '') });
+  } catch { /* The workbench displays Git's error, including local-change protection. */ }
 }
 function branchMenu(event: MouseEvent | KeyboardEvent, branch: GitRef) {
   const local = branch.name.startsWith('refs/heads/');
   const target = local ? branch.name.replace('refs/heads/', '') : branch.name;
   const items = [
-    ...(local ? [actionItem('Switch to branch', 'switch', { target }, branch.current), {
+    ...(local ? [{ label: 'Switch to branch', disabled: branch.current || busy.value || example.value, run: () => switchBranch(branch) }, {
       label: 'Compare with working tree', disabled: busy.value || example.value,
       run: () => { base.value = target; mode.value = 'branch'; view.value = 'changes'; },
     }] : []),
-    actionItem('Create branch here…', 'branch-create', { target }),
-    actionItem('Merge into current branch…', 'merge', { target }, branch.current),
-    ...(local ? [actionItem('Delete branch…', 'branch-delete', { target }, branch.current)] : []),
-    copyItem('Copy branch name', branch.name.replace(/^refs\/(heads|remotes)\//, '')),
+    { ...actionItem('Merge into current branch…', 'merge', { target }, branch.current), separatorBefore: local },
+    actionItem('Rebase current branch onto this…', 'rebase-onto', { target }, branch.current),
+    { ...actionItem('Create branch here…', 'branch-create', { target }), separatorBefore: true },
+    ...(local ? [{ ...actionItem('Delete branch…', 'branch-delete', { target }, branch.current), danger: true }] : []),
+    { ...copyItem('Copy branch name', branch.name.replace(/^refs\/(heads|remotes)\//, '')), separatorBefore: true },
     copyItem('Copy commit hash', branch.id),
   ];
   sidebarMenu.value?.open(event, items);
@@ -115,26 +122,64 @@ function worktreeMenu(event: MouseEvent | KeyboardEvent, path: string) {
   const main = normalized(path) === normalized(snapshot.value?.repositoryRoot || snapshot.value?.worktrees[0]?.path || '');
   const current = normalized(path) === normalized(repo.value);
   const active = threads.value.some(thread => thread.activeRunId && normalized(thread.worktreePath || projects.value.find(project => project.id === thread.projectId)?.workspaceRoot || '') === normalized(path));
+  const reason = main ? 'The main worktree cannot be removed.' : current ? 'Switch to another worktree first.' : active ? 'Stop the agent using this worktree first.' : undefined;
   sidebarMenu.value?.open(event, [
-    { label: 'Open worktree', disabled: busy.value || example.value, run: () => w.openRepo(path) },
-    actionItem('New worktree…', 'worktree-add'),
-    actionItem(main ? 'Remove worktree (main worktree)' : current ? 'Remove worktree (currently open)' : active ? 'Remove worktree (agent running)' : 'Remove worktree…', 'worktree-remove', { path }, main || current || active),
-    copyItem('Copy worktree path', path),
+    { label: 'Open worktree', disabled: busy.value || example.value || current, run: () => w.openRepo(path) },
+    { label: 'Reveal in Explorer', disabled: !desktop() || example.value, run: () => fileLocation('reveal_path', '', path) },
+    { ...actionItem('New worktree…', 'worktree-add'), separatorBefore: true },
+    { ...actionItem('Remove worktree…', 'worktree-remove', { path }, !!reason), danger: true, disabledReason: reason },
+    { ...copyItem('Copy worktree path', path), separatorBefore: true },
   ]);
 }
+
 function conversationMenu(event: MouseEvent | KeyboardEvent, thread: T3Thread) {
   sidebarMenu.value?.open(event, [
     { label: 'Open conversation', disabled: busy.value, run: () => { chatVisible.value = true; chat.value?.select(thread.id); } },
-    copyItem('Copy conversation title', thread.title), copyItem('Copy conversation ID', thread.id),
+    { ...copyItem('Copy conversation title', thread.title), separatorBefore: true }, copyItem('Copy conversation ID', thread.id),
   ]);
 }
 function tagMenu(event: MouseEvent | KeyboardEvent, tag: GitRef) {
   const name = tag.name.replace('refs/tags/', '');
-  sidebarMenu.value?.open(event, [actionItem('Create branch here…', 'branch-create', { target: tag.name }), actionItem('Delete tag…', 'tag-delete', { target: name }), copyItem('Copy tag name', name)]);
+  sidebarMenu.value?.open(event, [
+    actionItem('Create branch here…', 'branch-create', { target: tag.name }),
+    { ...actionItem('Delete tag…', 'tag-delete', { target: name }), separatorBefore: true, danger: true },
+    { ...copyItem('Copy tag name', name), separatorBefore: true },
+    copyItem('Copy commit hash', tag.id),
+  ]);
 }
 function stashMenu(event: MouseEvent | KeyboardEvent, stash: string) {
   const target = stash.split('\t')[0]!;
-  sidebarMenu.value?.open(event, [actionItem('Apply stash…', 'stash-apply', { target }), actionItem('Drop stash…', 'stash-drop', { target }), copyItem('Copy stash reference', target)]);
+  sidebarMenu.value?.open(event, [
+    actionItem('Apply stash…', 'stash-apply', { target }),
+    { ...actionItem('Drop stash…', 'stash-drop', { target }), separatorBefore: true, danger: true },
+    { ...copyItem('Copy stash reference', target), separatorBefore: true },
+  ]);
+}
+function commitMenu(event: MouseEvent | KeyboardEvent, commit: Commit) {
+  sidebarMenu.value?.open(event, [
+    { label: 'View commit', run: () => { view.value = 'history'; historyTab.value = 'commit'; return w.selectCommit(commit); } },
+    { ...actionItem('Create branch here…', 'branch-create', { target: commit.id }), separatorBefore: true },
+    actionItem('Cherry-pick commit…', 'cherry-pick', { target: commit.id }),
+    actionItem('Revert commit…', 'revert', { target: commit.id }),
+    { ...actionItem('Reset current branch to here…', 'reset', { target: commit.id }), separatorBefore: true, danger: true },
+    { ...copyItem('Copy commit hash', commit.id), separatorBefore: true },
+    { label: 'Copy commit message', run: async () => navigator.clipboard.writeText(example.value ? commit.subject : await w.read<string>('commit-message', { target: commit.id })) },
+  ]);
+}
+function repositoryContext(event: MouseEvent | KeyboardEvent, path: string) {
+  sidebarMenu.value?.open(event, [
+    { label: 'Open repository', disabled: busy.value, run: () => chooseRepository(path) },
+    { label: 'Rename repository…', separatorBefore: true, disabled: w.nameSaving.value, run: () => startRepositoryRename(path) },
+    { label: w.isFavorite(path) ? 'Unfavorite repository' : 'Favorite repository', disabled: w.favoriteSaving.value, run: () => w.toggleFavorite(path) },
+    { label: 'Reveal in Explorer', separatorBefore: true, disabled: !desktop(), run: () => fileLocation('reveal_path', '', path) },
+    { ...copyItem('Copy repository path', path), separatorBefore: true },
+  ]);
+}
+async function fileLocation(action: 'open_editor' | 'reveal_path' | 'full_path', path: string, root = repo.value) {
+  try {
+    const result = await invoke<string>(action, { repo: root, path });
+    if (action === 'full_path') await navigator.clipboard.writeText(result);
+  } catch (e) { error.value = String(e); }
 }
 watch([repo, busy, example], () => sidebarMenu.value?.close());
 const chatVisible = ref(false),
@@ -247,12 +292,6 @@ const definitions: Record<
     ],
     defaults: { target: "HEAD" },
   },
-  switch: {
-    title: "Switch branch",
-    description:
-      "Changes the current checkout. Git will refuse if local changes would be overwritten.",
-    fields: [{ key: "target", label: "Branch" }],
-  },
   "branch-delete": {
     title: "Delete branch",
     description:
@@ -278,6 +317,11 @@ const definitions: Record<
     description:
       "Merge into your current branch. Conflicts can be resolved in GitGoblin.",
     fields: [{ key: "target", label: "Branch to merge" }],
+  },
+  "rebase-onto": {
+    title: "Rebase current branch",
+    description: "Replay your current branch’s commits onto the selected branch. Commit or stash local changes first. This rewrites commit IDs; conflicts can be resolved in GitGoblin.",
+    fields: [{ key: "target", label: "Branch to rebase onto" }],
   },
   "cherry-pick": {
     title: "Cherry-pick commit",
@@ -577,12 +621,9 @@ async function resolveConflict() {
   }
 }
 async function openEditor() {
-  try {
-    await invoke("open_editor", { repo: repo.value, path: selected.value });
-  } catch (e) {
-    error.value = String(e);
-  }
+  await fileLocation('open_editor', selected.value);
 }
+
 async function chooseRepository(path?: string) {
   repositoryMenu.value?.hidePopover();
   if (path && snapshot.value && normalized(path) === normalized(repo.value)) return;
@@ -614,8 +655,15 @@ function keydown(event: KeyboardEvent) {
     menu.value = false;
   }
 }
-onMounted(() => window.addEventListener("keydown", keydown));
-onUnmounted(() => window.removeEventListener("keydown", keydown));
+const preventBrowserMenu = (event: Event) => event.preventDefault();
+onMounted(() => {
+  window.addEventListener("keydown", keydown);
+  document.addEventListener('contextmenu', preventBrowserMenu, true);
+});
+onUnmounted(() => {
+  window.removeEventListener("keydown", keydown);
+  document.removeEventListener('contextmenu', preventBrowserMenu, true);
+});
 watch(amend, async (value) => {
   if (value && !commitMessage.value && snapshot.value?.head) {
     try {
@@ -642,8 +690,8 @@ watch(amend, async (value) => {
           /></svg
         ><span>gitgoblin</span>
       </div>
-      <nav v-if="favorites.length" class="favorite-tabs" aria-label="Favorite repositories">
-        <button v-for="path in favorites" :key="path" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
+      <nav v-if="favorites.length" class="favorite-tabs" data-tauri-drag-region="false" aria-label="Favorite repositories">
+        <button v-for="path in favorites" :key="path" aria-haspopup="menu" @contextmenu="repositoryContext($event, path)" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
           <Star :size="12" fill="currentColor" /><span>{{ w.repositoryName(path) }}</span>
         </button>
       </nav>
@@ -655,8 +703,8 @@ watch(amend, async (value) => {
       </div>
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
         <div class="repository-menu-heading">Recent repositories</div>
-        <div v-for="path in [...new Set([...favorites, ...recent])]" :key="path" class="repository-menu-row">
-          <button :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'true' : undefined" @click="chooseRepository(path)">
+        <div v-for="path in [...new Set([...favorites, ...recent])]" :key="path" class="repository-menu-row" @contextmenu="repositoryContext($event, path)">
+          <button aria-haspopup="menu" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'true' : undefined" @click="chooseRepository(path)">
             <FolderGit2 :size="16" /><span><strong>{{ w.repositoryName(path) }}</strong><small>{{ path }}</small></span><Check v-if="normalized(path) === normalized(snapshot?.repositoryRoot || repo)" :size="14" />
           </button>
           <button class="icon-button" :aria-label="`Rename ${w.repositoryName(path)}`" title="Rename repository" @click="startRepositoryRename(path)"><Pencil :size="14" /></button>
@@ -785,7 +833,7 @@ watch(amend, async (value) => {
                 :size="12"
               />BRANCHES<span>{{ localBranches.length }}</span></button
             ><template v-if="sections.branches"
-              ><BranchTree :key="repo" :nodes="localBranchTree" @context="branchMenu" @select="branch => !branch.current && ask('switch', { target: branch.name.replace('refs/heads/', '') })" />
+              ><BranchTree :key="repo" :nodes="localBranchTree" @context="branchMenu" @select="switchBranch" />
               <button class="tree-row subdued" @click="ask('branch-create')">
                 <Plus :size="13" />New branch
               </button></template
@@ -940,7 +988,7 @@ watch(amend, async (value) => {
             v-for="path in recent"
             :key="path"
             class="tree-row"
-            :title="path"
+            :title="path" aria-haspopup="menu" @contextmenu="repositoryContext($event, path)" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)"
             @click="w.openRepo(path)"
           >
             <FolderGit2 :size="15" /><span>{{
@@ -1048,7 +1096,7 @@ watch(amend, async (value) => {
               <div v-for="group in fileGroups" :key="group.mode" class="file-group">
                 <div class="file-list-label">{{ group.label }}<span>{{ group.files.length }}</span><button v-if="group.mode !== 'branch'" class="stage-all" :disabled="busy || example || !group.files.length || group.files.some(file => file.conflict)" :title="group.files.some(file => file.conflict) ? 'Resolve conflicting files first' : undefined" @click="toggleFileStage(null, group.mode)">{{ group.mode === 'staged' ? 'Unstage all' : 'Stage all' }}</button></div>
                 <div class="file-list">
-                <FileList :key="repo" :files="group.files" :tree="filesAsTree" :selected="mode === group.mode ? selected : ''" :mode="group.mode" :editable="!busy && !example && group.mode !== 'branch'" @select="selectFile($event, group.mode)" @toggle-selection="toggleSelectedFiles($event, group.mode)" @toggle-stage="toggleFileStage($event, group.mode)" @toggle-folder="toggleFileStage($event, group.mode, true)" />
+                <FileList :key="repo" :files="group.files" :tree="filesAsTree" :selected="mode === group.mode ? selected : ''" :mode="group.mode" :editable="!busy && !example && group.mode !== 'branch'" :native-actions="desktop() && !example" @open-editor="fileLocation('open_editor', $event)" @reveal="fileLocation('reveal_path', $event)" @copy-full-path="fileLocation('full_path', $event)" @error="error = $event" @select="selectFile($event, group.mode)" @toggle-selection="toggleSelectedFiles($event, group.mode)" @toggle-stage="toggleFileStage($event, group.mode)" @toggle-folder="toggleFileStage($event, group.mode, true)" />
                 <div v-if="!group.files.length" class="small-empty">
                   <Check :size="23" />
                   <p>
@@ -1188,7 +1236,7 @@ watch(amend, async (value) => {
               />
             </form>
           </div>
-          <HistoryList :commits="commits" :selected="selectedCommit?.id" :loading="w.historyLoading.value" :has-more="w.historyHasMore.value" @select="w.selectCommit" @load-more="w.loadHistory()" />
+          <HistoryList :commits="commits" :selected="selectedCommit?.id" :loading="w.historyLoading.value" :has-more="w.historyHasMore.value" @select="w.selectCommit" @context="commitMenu" @load-more="w.loadHistory()" />
           <div class="commit-detail">
             <div class="detail-tabs" role="tablist" aria-label="Commit details">
               <button v-for="tab in ['commit', 'changes']" :key="tab" role="tab" :aria-selected="historyTab === tab" :class="{ active: historyTab === tab }" @click="historyTab = tab">{{ tab === 'commit' ? 'Commit' : 'Changes' }}</button>
