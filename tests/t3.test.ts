@@ -37,6 +37,80 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it.each([false, true])("creates an empty conversation in its worktree and seeds only its first message title (legacy=%s)", async legacy => {
+    const client = new T3Client(async () => "ws://127.0.0.1/ws");
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    socket.receive({ _tag: "Chunk", requestId: socket.sent[0].id, values: [{ kind: "snapshot", snapshot: {
+      ...(legacy ? { snapshotSequence: 1 } : { schemaVersion: 2 }), projects: [], threads: [],
+    } }] });
+    const acknowledge = (value: unknown) => socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id,
+      exit: { _tag: "Success", value } });
+    const modelSelection = { instanceId: "codex", model: "test" };
+    const creating = client.createThread("project", "New conversation", modelSelection, "D:/feature");
+    const creation = socket.sent.at(-1);
+    expect(creation.payload).toMatchObject({ title: "New conversation", projectId: "project", modelSelection });
+    expect(creation.payload.initialMessage).toBeUndefined();
+    if (legacy) expect(creation.payload.worktreePath).toBe("D:/feature");
+    else expect(creation.payload.workspaceStrategy).toEqual({ type: "existing_worktree", worktreePath: "D:/feature" });
+    acknowledge({ threadId: "new" });
+    const { threadId } = await creating;
+    const thread = { id: threadId, title: "New conversation", modelSelection, runtimeMode: "approval-required", interactionMode: "default" } as any;
+    expect(socket.sent.filter(frame => frame.payload?.type === "message.dispatch" || frame.payload?.type === "thread.turn.start")).toHaveLength(0);
+    const sending = client.sendMessage(thread, "/triage #42");
+    expect(socket.sent.at(-1).payload).toMatchObject({ titleSeed: "/triage #42", threadId });
+    acknowledge({});
+    await sending;
+    const followup = client.sendMessage(thread, "Continue");
+    expect(socket.sent.at(-1).payload.titleSeed).toBeUndefined();
+    acknowledge({});
+    await followup;
+  });
+
+  it("seeds a restored empty conversation but preserves an existing conversation title", async () => {
+    const client = new T3Client(async () => "ws://127.0.0.1/ws");
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const thread = { id: "empty", title: "New conversation" } as any;
+    client.projection = { thread, messages: [], runtimeRequests: [], turnItems: [] };
+    const first = client.sendMessage(thread, "Investigate issue");
+    expect(socket.sent.at(-1).payload.titleSeed).toBe("Investigate issue");
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
+    await first;
+    client.projection.messages.push({ role: "user" } as any);
+    const second = client.sendMessage(thread, "Follow up");
+    expect(socket.sent.at(-1).payload.titleSeed).toBeUndefined();
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
+    await second;
+  });
+
+  it("retains title generation after a rejected first message and respects a manual rename", async () => {
+    const client = new T3Client(async () => "ws://127.0.0.1/ws");
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const creating = client.createThread("project", "New conversation", { instanceId: "codex", model: "test" });
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: { threadId: "new" } } });
+    await creating;
+    const thread = { id: "new", title: "New conversation" } as any;
+    const first = client.sendMessage(thread, "Investigate issue");
+    const rejected = expect(first).rejects.toThrow("Rejected");
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id,
+      exit: { _tag: "Failure", cause: [{ _tag: "Die", defect: "Rejected" }] } });
+    await rejected;
+    const retry = client.sendMessage(thread, "Revised instruction");
+    expect(socket.sent.at(-1).payload.titleSeed).toBe("Revised instruction");
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id,
+      exit: { _tag: "Failure", cause: [{ _tag: "Die", defect: "Rejected" }] } });
+    await expect(retry).rejects.toThrow("Rejected");
+    thread.title = "My title";
+    const renamed = client.sendMessage(thread, "Continue");
+    expect(socket.sent.at(-1).payload.titleSeed).toBeUndefined();
+    socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
+    await renamed;
+  });
   it("reconnects read subscriptions without replaying a possibly received mutation", async () => {
     vi.useFakeTimers();
     const client = new T3Client(async () => "ws://127.0.0.1/ws");

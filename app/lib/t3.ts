@@ -72,6 +72,7 @@ export class T3Client {
   private readyTimeout?: ReturnType<typeof setTimeout>;
   private threadId = "";
   private legacyProtocol = false;
+  private untitledThreads = new Set<string>();
   private cancelThread?: () => void;
   projects: T3Project[] = [];
   threads: T3Thread[] = [];
@@ -366,17 +367,21 @@ export class T3Client {
     return this.call("orchestration.dispatchCommand", command);
   }
   sendMessage(thread: T3Thread, text: string) {
-    if (this.legacyProtocol) return this.dispatch({
+    const titleSeed = text.trim() && thread.title === "New conversation" && (this.untitledThreads.has(thread.id) || (
+      this.projection?.thread.id === thread.id &&
+      !this.projection.messages.some(message => message.role === "user")
+    )) ? { titleSeed: text.trim() } : {};
+    const sent = this.legacyProtocol ? this.dispatch({
       type: "thread.turn.start",
       commandId: crypto.randomUUID(),
       threadId: thread.id,
       message: { messageId: crypto.randomUUID(), role: "user", text, attachments: [] },
       modelSelection: thread.modelSelection,
+      ...titleSeed,
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       createdAt: new Date().toISOString(),
-    });
-    return this.dispatch({
+    }) : this.dispatch({
       type: "message.dispatch",
       commandId: crypto.randomUUID(),
       threadId: thread.id,
@@ -384,10 +389,15 @@ export class T3Client {
       createdBy: "user",
       creationSource: "web",
       text,
+      ...titleSeed,
       attachments: [],
       dispatchMode: {
         type: thread.activeRunId ? "queue_after_active" : "start_immediately",
       },
+    });
+    return sent.then(result => {
+      this.untitledThreads.delete(thread.id);
+      return result;
     });
   }
   stop(thread: T3Thread) {
@@ -429,7 +439,10 @@ export class T3Client {
         type: "thread.create", commandId: crypto.randomUUID(), threadId, projectId,
         title, modelSelection, runtimeMode: "approval-required", interactionMode: "default",
         branch: null, worktreePath: worktreePath || null, createdAt: new Date().toISOString(),
-      }).then(() => ({ threadId }));
+      }).then(() => {
+        if (title === "New conversation") this.untitledThreads.add(threadId);
+        return { threadId };
+      });
     }
     return this.call("orchestration.launchThread", {
       commandId: crypto.randomUUID(),
@@ -442,6 +455,9 @@ export class T3Client {
       workspaceStrategy: worktreePath
         ? { type: "existing_worktree", worktreePath }
         : { type: "root" },
+    }).then(result => {
+      if (title === "New conversation") this.untitledThreads.add(result.threadId);
+      return result;
     });
   }
   disconnect() {

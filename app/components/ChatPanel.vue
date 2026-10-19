@@ -4,10 +4,8 @@ import {
   Bot,
   ArrowUp,
   Square,
-  Plus,
   X,
   Link2,
-  Unplug,
   MessageSquare,
   ShieldCheck,
   ChevronRight,
@@ -15,11 +13,16 @@ import {
   Check,
   CircleAlert,
   Wrench,
+  Search,
+  Code2,
+  Bug,
+  GitBranch,
 } from "lucide-vue-next";
 import { conversationTurns } from '~/lib/conversation-turns';
+import { conversationDefaults, conversationPresets, conversationPrompt, newConversationWorktree } from '~/lib/conversation-presets';
 import { isThreadRunning, repositoryThreadKey, repositoryThreads, repositoryThreadSelection } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
-import { invoke, desktop } from "~/lib/native";
+import { invoke, desktop, git } from "~/lib/native";
 import type { T3Thread, T3Project, T3Projection } from "~/lib/types";
 const props = defineProps<{
   context: string;
@@ -47,8 +50,18 @@ const pairing = ref(""),
   showPairing = ref(false),
   showNew = ref(false);
 const newProject = ref(""),
-  newTitle = ref(""),
+  newWorktree = ref(""),
   newModel = ref("");
+const creating = ref(false);
+const newConversationDialog = ref<HTMLElement>();
+const newConversationButton = ref<HTMLButtonElement>();
+const newPreset = ref<(typeof conversationPresets)[number]>(conversationPresets[0]);
+const newTicket = ref("");
+const needsTicket = computed(() => 'ticket' in newPreset.value);
+const useNewWorktree = ref(false);
+const newChatError = ref("");
+const canCreate = computed(() => connected.value && !creating.value && !!newProject.value && !!newModel.value && !!newWorktree.value.trim() && (!needsTicket.value || !!newTicket.value.trim()));
+const presetIcons = [MessageSquare, Search, Code2, Bug, ShieldCheck];
 const modelOptions = computed(() => {
   const options = new Map<string, { instanceId: string; model: string }>();
   for (const selection of [
@@ -139,18 +152,6 @@ async function pair() {
     error.value = String(e);
   }
 }
-async function disconnect() {
-  try {
-    await invoke("t3_disconnect");
-    client.disconnect();
-    projection.value = undefined;
-    threads.value = [];
-    projects.value = [];
-    emit("threads", [], [], false);
-  } catch (e) {
-    error.value = String(e);
-  }
-}
 async function send() {
   if (!thread.value || !prompt.value.trim() || sending.value) return;
   sending.value = true;
@@ -195,25 +196,101 @@ async function respond(id: string, decision: "accept" | "decline") {
     error.value = String(e);
   }
 }
-async function create() {
+async function openCreatedConversation(id: string, text: string, path: string) {
+  rememberedThreads.value[repositoryThreadKey(path)] = id;
+  select(id, false);
+  prompt.value = text;
+  drafts.set(id, text);
+  emit("selectWorktree", path, id);
+  await nextTick();
+  composer.value?.focus();
+}
+async function commitStaged(repo: string, instruction: string) {
+  if (!connected.value) throw new Error("Connect T3 Code for automatic commits, or choose a manual commit message.");
+  let target = repositoryThreads(thread.value ? [thread.value] : [], projects.value, repo)[0];
+  const existing = !!target;
+  if (!target) {
+    const defaults = conversationDefaults(repo, projects.value, thread.value);
+    const modelSelection = defaults.modelSelection || (modelOptions.value[0] ? JSON.parse(modelOptions.value[0].value) : undefined);
+    if (!defaults.projectId || !modelSelection) throw new Error("Configure a T3 conversation for this worktree before committing automatically.");
+    const { threadId } = await client.createThread(defaults.projectId, "New conversation", modelSelection, repo);
+    await openCreatedConversation(threadId, instruction, repo);
+    target = { id: threadId, projectId: defaults.projectId, title: "New conversation", modelSelection,
+      worktreePath: repo, branch: null, status: "idle", activeRunId: null, runtimeMode: "approval-required", interactionMode: "default" };
+  }
+  sending.value = true;
   try {
-    const result = await client.createThread(
-      newProject.value,
-      newTitle.value,
-      JSON.parse(newModel.value),
-    );
-    showNew.value = false;
-    select(result.threadId);
-  } catch (e) {
-    error.value = String(e);
+    await client.sendMessage(target, instruction);
+    if (!existing) {
+      drafts.delete(target.id);
+      if (selectedId.value === target.id && prompt.value === instruction) prompt.value = "";
+    }
+  } finally {
+    sending.value = false;
   }
 }
-function newChat() {
+async function create(preset: (typeof conversationPresets)[number]) {
+  if (!canCreate.value) return;
+  creating.value = true;
+  newChatError.value = "";
+  let createdWorktree = false;
+  try {
+    if (useNewWorktree.value) {
+      const worktree = newConversationWorktree(newWorktree.value.trim(), crypto.randomUUID().slice(0, 8));
+      await git({ repo: newWorktree.value.trim(), action: "worktree-add", path: worktree.path, text: worktree.branch, target: "HEAD" });
+      // Keep the created worktree for retry if T3 conversation creation fails.
+      newWorktree.value = worktree.path;
+      useNewWorktree.value = false;
+      createdWorktree = true;
+    }
+    const result = await client.createThread(
+      newProject.value,
+      "New conversation",
+      JSON.parse(newModel.value),
+      newWorktree.value.trim(),
+    );
+    showNew.value = false;
+    await openCreatedConversation(result.threadId, conversationPrompt(preset, newTicket.value), newWorktree.value.trim());
+  } catch (e) {
+    newChatError.value = createdWorktree
+      ? `Worktree created at ${newWorktree.value}. Conversation creation failed: ${String(e)} Retry to use this worktree.`
+      : String(e);
+  } finally {
+    creating.value = false;
+  }
+}
+function newChat(trigger?: HTMLButtonElement) {
+  if (creating.value) return;
+  newConversationButton.value = trigger;
+  if (!connected.value) { showPairing.value = true; return; }
+  const defaults = conversationDefaults(props.repo, projects.value, thread.value);
+  newProject.value = defaults.projectId;
+  newWorktree.value = defaults.worktreePath;
+  newModel.value = defaults.modelSelection ? JSON.stringify(defaults.modelSelection) : modelOptions.value[0]?.value || "";
+  newPreset.value = conversationPresets[0];
+  newTicket.value = "";
+  useNewWorktree.value = false;
+  newChatError.value = "";
   showNew.value = true;
-  newProject.value = thread.value?.projectId || projects.value[0]?.id || "";
-  newModel.value = thread.value
-    ? JSON.stringify(thread.value.modelSelection)
-    : modelOptions.value[0]?.value || "";
+  void nextTick(() => newConversationDialog.value?.querySelector<HTMLButtonElement>('.conversation-preset')?.focus());
+}
+function changeNewProject() {
+  newTicket.value = "";
+  const project = projects.value.find(project => project.id === newProject.value);
+  newWorktree.value = project?.workspaceRoot || "";
+  if (project?.defaultModelSelection) newModel.value = JSON.stringify(project.defaultModelSelection);
+}
+function dismissNewDialog() {
+  if (creating.value) return;
+  showNew.value = false;
+  newConversationButton.value?.focus();
+}
+function trapNewDialog(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return;
+  const elements = [...(newConversationDialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') || [])];
+  const first = elements[0], last = elements.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
 }
 function approvalContext(id: string) {
   const items = projection.value?.turnItems || [];
@@ -248,9 +325,13 @@ watch([() => props.repo, connected, matchingThreads], () => {
   const next = connected.value ? repositoryThreadSelection(matchingThreads.value, rememberedThreads.value[repositoryThreadKey(props.repo)]) : '';
   if (next !== selectedId.value) select(next, false);
 }, { immediate: true });
-onUnmounted(() => client.disconnect());
+onUnmounted(() => {
+  client.disconnect();
+});
 defineExpose({
   select,
+  newConversation: newChat,
+  commitStaged,
   focusComposer: () => composer.value?.focus(),
   stopAll: async () => {
     for (const t of matchingThreads.value.filter((t) => t.activeRunId))
@@ -263,22 +344,6 @@ defineExpose({
     <slot />
     <div class="panel-heading">
       <span class="active-conversation" :title="thread?.title || 'Conversations'"><MessageSquare :size="15" /><span>{{ thread?.title || 'Conversations' }}</span></span>
-      <div class="button-row">
-        <button
-          class="icon-button"
-          title="New conversation"
-          :disabled="!connected"
-          @click="newChat"
-        >
-          <Plus :size="16" /></button
-        ><button
-          class="icon-button"
-          :title="connected ? 'Disconnect T3 Code' : 'Connect T3 Code'"
-          @click="connected ? disconnect() : (showPairing = true)"
-        >
-          <Link2 :size="15" />
-        </button>
-      </div>
     </div>
     <div class="chat-connection">
       <span class="status-dot" :class="{ live: connected }" />{{
@@ -510,60 +575,66 @@ defineExpose({
           </div>
         </section>
       </div>
-      <div v-if="showNew" class="modal-backdrop" @click.self="showNew = false">
-        <section
-          class="modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="new-chat-title"
-        >
+      <div v-if="showNew" class="modal-backdrop" @click.self="dismissNewDialog" @keydown.esc.stop.prevent="dismissNewDialog">
+        <form ref="newConversationDialog" class="modal new-conversation-dialog" role="dialog" aria-modal="true"
+          aria-labelledby="new-conversation-title" aria-describedby="new-conversation-description"
+          @submit.prevent="create(newPreset)" @keydown="trapNewDialog">
           <div class="modal-heading">
-            <h2 id="new-chat-title">New conversation</h2>
-            <button
-              class="icon-button"
-              aria-label="Close"
-              @click="showNew = false"
-            >
-              <X :size="18" />
+            <h2 id="new-conversation-title">New conversation</h2>
+            <button type="button" class="icon-button" aria-label="Close new conversation" :disabled="creating" @click="dismissNewDialog"><X :size="18" /></button>
+          </div>
+          <p id="new-conversation-description">Choose an action. You can edit the instruction before sending it.</p>
+          <div class="conversation-actions" role="group" aria-label="Conversation action">
+            <button v-for="(preset, index) in conversationPresets" :key="preset.label" type="button" class="conversation-preset"
+              :aria-label="preset.label" :aria-pressed="newPreset.label === preset.label" :disabled="creating" @click="newPreset = preset">
+              <component :is="presetIcons[index]" :size="19" />
+              <span><strong>{{ preset.label }}</strong><small>{{ preset.description }}</small></span>
+              <Check v-if="newPreset.label === preset.label" :size="15" class="preset-check" />
             </button>
           </div>
-          <label
-            >Project<select v-model="newProject">
-              <option v-for="p in projects" :key="p.id" :value="p.id">
-                {{ p.title || p.workspaceRoot }}
-              </option>
-            </select></label
-          ><label>Title<input v-model="newTitle" /></label
-          ><label
-            >Model<select v-model="newModel">
-              <option
-                v-for="option in modelOptions"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select></label
-          >
+          <template v-if="needsTicket">
+            <DevopsTickets :repo="newWorktree" :selected="newTicket" :disabled="creating" @select="newTicket = $event" />
+            <label>Ticket URL, number, or description<textarea v-model="newTicket" :disabled="creating" rows="2" required placeholder="Select a ticket above, or enter a URL, #123, or description" /></label>
+          </template>
+          <div class="conversation-options">
+            <label>Project<select v-model="newProject" :disabled="creating" @change="changeNewProject">
+              <option disabled value="">Choose a project</option>
+              <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title || p.workspaceRoot }}</option>
+            </select></label>
+            <label>Model<select v-model="newModel" :disabled="creating">
+              <option v-for="option in modelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select></label>
+          </div>
           <p v-if="!modelOptions.length">Configure a model in T3 Code first.</p>
-          <p>Uses the project’s root worktree with approvals required.</p>
+          <p v-if="!connected">Reconnect T3 Code to create a conversation.</p>
+          <label>Worktree<input v-model="newWorktree" :disabled="creating" placeholder="Worktree path" /></label>
+          <label class="force-option new-worktree-option"><input v-model="useNewWorktree" type="checkbox" :disabled="creating" /><GitBranch :size="15" />Use new worktree</label>
+          <div v-if="newChatError" class="inline-error" role="alert">{{ newChatError }}</div>
           <div class="modal-footer">
-            <button @click="showNew = false">Cancel</button
-            ><button
-              class="primary"
-              :disabled="!newProject || !newTitle || !newModel"
-              @click="create"
-            >
-              Create conversation
-            </button>
+            <button type="button" :disabled="creating" @click="dismissNewDialog">Cancel</button>
+            <button type="submit" class="primary" :disabled="!canCreate"><LoaderCircle v-if="creating" :size="14" class="spin" />{{ creating ? 'Creating…' : 'Create conversation' }}</button>
           </div>
-        </section>
-      </div></Teleport
+        </form>
+      </div>
+      </Teleport
     >
   </aside>
 </template>
 
 <style scoped>
+.new-conversation-dialog { width: 680px; }
+.new-conversation-dialog textarea { width: 100%; font-size: 12px; }
+.conversation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.conversation-preset { min-height: 76px; display: flex; align-items: flex-start; gap: 11px; padding: 15px; text-align: left; border: 1px solid #35405a; background: #171c26; }
+.conversation-preset[aria-pressed="true"] { border-color: #8ca5e7; background: #27334b; }
+.conversation-preset > svg { flex-shrink: 0; margin-top: 2px; color: #a8bbeb; }
+.conversation-preset span { display: grid; gap: 6px; flex: 1; }
+.conversation-preset strong { font-size: 13px; font-weight: 600; }
+.conversation-preset small { color: #9eadc8; font-size: 11px; line-height: 1.5; }
+.conversation-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.conversation-options select, .conversation-options input { min-width: 0; }
+.modal .new-worktree-option { gap: 8px; }
+@media (max-width: 540px) { .conversation-actions, .conversation-options { grid-template-columns: 1fr; } }
 .agent-status { display: flex; align-items: center; gap: 7px; min-height: 26px; margin-bottom: 5px; color: #9baed4; font-size: 11px; }
 .work-details { margin: 8px 0 12px; color: #8e9bb4; }
 .work-details summary { display: flex; align-items: center; gap: 5px; width: fit-content; padding: 8px 0; cursor: pointer; font-size: 12px; list-style: none; }

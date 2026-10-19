@@ -45,6 +45,7 @@ import {
 import { useWorkbench } from "~/composables/useWorkbench";
 import { branchTree } from "~/lib/branches";
 import { visibleThreads } from "~/lib/threads";
+import { commitInstruction, type CommitContext } from "~/lib/commit-instruction";
 import { desktop, invoke } from "~/lib/native";
 import { clampSidebarWidth, defaultSidebarWidth, maxSidebarWidth, minSidebarWidth, sidebarKeyboardWidth } from '~/lib/sidebar';
 import type { Commit, T3Thread, T3Project, GitRequest, GitRef } from "~/lib/types";
@@ -138,6 +139,7 @@ function resetSidebarWidth() {
   saveSidebarWidth();
 }
 const repositoryMenu = ref<HTMLDivElement>();
+const fileMenu = ref<HTMLDivElement>();
 const renamePath = ref(''), renameName = ref('');
 const renameInput = ref<HTMLInputElement>();
 async function startRepositoryRename(path: string) {
@@ -247,10 +249,24 @@ async function fileLocation(action: 'open_editor' | 'reveal_path' | 'full_path',
 watch([repo, busy, example], () => sidebarMenu.value?.close());
 const chatVisible = ref(false),
   context = ref(""),
-  chat = ref<{ select: (id: string) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
-  commitMessage = ref(""),
-  amend = ref(false),
+  chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; commitStaged: (repo: string, instruction: string) => Promise<void>; stopAll: () => Promise<void>; focusComposer: () => void }>(),
+  committing = ref(false),
+  commitOptionsMenu = ref<HTMLDivElement>(),
   menu = ref(false);
+async function openNewConversation(event: MouseEvent) {
+  const trigger = event.currentTarget as HTMLButtonElement;
+  chatVisible.value = true;
+  await nextTick();
+  chat.value?.newConversation(trigger);
+}
+function toggleTopMenu(element: HTMLDivElement | undefined, event: MouseEvent) {
+  if (!element) return;
+  if (element.matches(':popover-open')) { element.hidePopover(); return; }
+  element.showPopover();
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  element.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - element.offsetWidth - 8))}px`;
+  element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+}
 const threads = ref<T3Thread[]>([]),
   selectedThreadId = ref(''),
   projects = ref<T3Project[]>([]),
@@ -500,11 +516,17 @@ const definitions: Record<
   commit: {
     title: "Commit staged changes",
     description: "Create a commit from the index.",
+    fields: [{ key: "text", label: "Commit message" }],
+  },
+  'auto-commit': {
+    title: "Commit staged changes",
+    description: "An agent will inspect the staged changes, generate a message, run relevant checks, and create the commit.",
   },
   amend: {
     title: "Amend last commit",
     description:
       "Replace the most recent commit with the staged content and message. This changes its commit ID.",
+    fields: [{ key: "text", label: "Commit message" }],
   },
 };
 function ask(action: string, preset: Record<string, string> = {}) {
@@ -523,6 +545,11 @@ async function executeDialog() {
   if (!dialog.value) return;
   dialogError.value = "";
   try {
+    if (dialog.value === 'auto-commit') {
+      if (await commit(true)) dialog.value = '';
+      else dialogError.value = error.value;
+      return;
+    }
     if (dialog.value === 'worktree-remove' && threads.value.some(thread => thread.activeRunId && normalized(thread.worktreePath || projects.value.find(project => project.id === thread.projectId)?.workspaceRoot || '') === normalized(values.value.path || ''))) {
       throw new Error('Stop the agent using this worktree before removing it.');
     }
@@ -544,10 +571,6 @@ async function executeDialog() {
         .map((c) => `${c.action} ${c.id}`)
         .join("\n");
     await w.mutate(dialog.value, params);
-    if (dialog.value === "commit" || dialog.value === "amend") {
-      commitMessage.value = "";
-      amend.value = false;
-    }
     dialog.value = "";
   } catch (e) {
     dialogError.value = String(e);
@@ -601,16 +624,35 @@ async function patch(text: string) {
     });
   } catch {}
 }
-async function commit() {
-  if (!commitMessage.value.trim()) return;
-  if (activeAgents.value.length || amend.value) {
-    ask(amend.value ? "amend" : "commit", { text: commitMessage.value });
-    return;
-  }
+async function commit(confirmed = false) {
+  if (busy.value || committing.value || example.value || !staged.value.length) return false;
+  if (activeAgents.value.length && !confirmed) { ask('auto-commit'); return false; }
+  committing.value = true;
+  error.value = '';
   try {
-    await w.mutate("commit", { text: commitMessage.value });
-    commitMessage.value = "";
-  } catch {}
+    if (snapshot.value?.files.some(file => file.conflict)) throw new Error('Resolve conflicts before committing.');
+    const root = repo.value;
+    const context = await w.read<CommitContext>('commit-context');
+    if (root !== repo.value) throw new Error('The repository changed. Retry Commit in the intended repository.');
+    chatVisible.value = true;
+    await nextTick();
+    if (!chat.value) throw new Error('The conversation panel is unavailable.');
+    await chat.value.commitStaged(root, commitInstruction(root, context));
+    notice.value = 'Commit task started. Follow its progress in the conversation.';
+    return true;
+  } catch (e) {
+    error.value = String(e);
+    return false;
+  } finally {
+    committing.value = false;
+  }
+}
+async function manualCommit(amending = false) {
+  commitOptionsMenu.value?.hidePopover();
+  try {
+    const text = amending ? await w.read<string>('commit-message', { target: 'HEAD' }) : '';
+    ask(amending ? 'amend' : 'commit', { text });
+  } catch (e) { error.value = String(e); }
 }
 function addContext(text: string) {
   context.value = `File: ${selected.value || selectedCommit.value?.id || repo.value}\n\n${text}`;
@@ -707,6 +749,7 @@ async function openEditor() {
 }
 
 async function chooseRepository(path?: string) {
+  fileMenu.value?.hidePopover();
   repositoryMenu.value?.hidePopover();
   if (path && snapshot.value && normalized(path) === normalized(repo.value)) return;
   try {
@@ -725,7 +768,7 @@ function reorder(index: number, delta: number) {
 function keydown(event: KeyboardEvent) {
   if (event.ctrlKey && event.key === "o") {
     event.preventDefault();
-    void w.openRepo();
+    void chooseRepository();
   }
   if (event.ctrlKey && event.key === "r") {
     event.preventDefault();
@@ -758,17 +801,6 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateSidebarViewport);
   workspaceObserver?.disconnect();
 });
-watch(amend, async (value) => {
-  if (value && !commitMessage.value && snapshot.value?.head) {
-    try {
-      commitMessage.value = await w.read<string>("commit-message", {
-        target: "HEAD",
-      });
-    } catch (e) {
-      error.value = String(e);
-    }
-  }
-});
 </script>
 <template>
   <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot, 'resizing-sidebar': resizingSidebar }" :style="{ '--sidebar': `${sidebarWidth}px`, '--chat': `${chatWidth}px`, '--files-width': filesWidth === undefined ? undefined : `${filesWidth}px`, '--details-height': detailsHeight === undefined ? undefined : `${detailsHeight}px` }">
@@ -783,6 +815,13 @@ watch(amend, async (value) => {
             stroke-width="2"
           /></svg
         ><span>gitgoblin</span>
+        <nav class="application-menu" aria-label="Application menu" data-tauri-drag-region="false">
+          <button aria-haspopup="true" @click="toggleTopMenu(fileMenu, $event)">File<ChevronDown :size="11" /></button>
+        </nav>
+      </div>
+      <div id="file-menu" ref="fileMenu" popover class="file-menu" data-tauri-drag-region="false" aria-label="File actions">
+        <button :disabled="busy" @click="chooseRepository()"><FolderOpen :size="15" />Open repository…<kbd>Ctrl O</kbd></button>
+        <button v-if="!desktop()" @click="fileMenu?.hidePopover(); w.showExample()"><Layers :size="15" />Explore example workspace</button>
       </div>
       <nav v-if="favorites.length" class="favorite-tabs" data-tauri-drag-region="false" aria-label="Favorite repositories">
         <button v-for="path in favorites" :key="path" aria-haspopup="menu" @contextmenu="repositoryContext($event, path)" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
@@ -791,7 +830,7 @@ watch(amend, async (value) => {
       </nav>
       <div class="titlebar-context">
         <button class="repository-switch" popovertarget="repository-menu" aria-label="Switch repository" :disabled="busy" :title="repo || 'Switch repository'">
-          <FolderGit2 :size="15" /><strong>{{ snapshot ? repoName : 'Open repository' }}</strong><ChevronDown :size="12" />
+          <FolderGit2 :size="15" /><strong>{{ snapshot ? repoName : 'Repositories' }}</strong><ChevronDown :size="12" />
         </button>
         <template v-if="snapshot"><span class="context-divider">/</span><GitBranch :size="13" /><span :title="snapshot.branch">{{ snapshot.branch }}</span></template>
       </div>
@@ -806,9 +845,21 @@ watch(amend, async (value) => {
           <button class="icon-button" :disabled="busy || w.favoriteSaving.value" :aria-label="`Remove ${w.repositoryName(path)} from GitGoblin`" title="Remove from GitGoblin (keeps folder on disk)" @click="w.removeRepository(path)"><X :size="14" /></button>
         </div>
         <p v-if="!recent.length && !favorites.length" class="nav-hint">Opened repositories will appear here.</p>
-        <button class="repository-menu-open" :disabled="busy" @click="chooseRepository()"><Plus :size="16" />Open repository...<kbd>Ctrl O</kbd></button>
       </div>
+      <button v-if="snapshot" class="new-conversation-action secondary" aria-haspopup="dialog" :disabled="example || busy || committing" @click="openNewConversation" data-tauri-drag-region="false">
+        <MessageSquare :size="15" />New conversation
+      </button>
           <div v-if="snapshot" class="toolbar-actions" aria-label="Git actions">
+            <div class="commit-actions" data-tauri-drag-region="false">
+              <button class="primary" :disabled="busy || committing || example || !staged.length || !t3Connected"
+                :title="t3Connected ? 'Generate a message and commit staged changes' : 'Connect T3 Code for automatic commits; manual messages are in Commit options'"
+                @click="commit()"><GitCommitHorizontal :size="15" />{{ committing ? 'Starting…' : 'Commit' }}<small v-if="staged.length">{{ staged.length }}</small></button>
+              <button aria-label="Commit options" aria-haspopup="true" :disabled="busy || committing || example" @click="toggleTopMenu(commitOptionsMenu, $event)"><ChevronDown :size="13" /></button>
+            </div>
+            <div id="commit-menu" ref="commitOptionsMenu" popover class="commit-menu" data-tauri-drag-region="false" aria-label="Commit options">
+              <button :disabled="!staged.length" @click="manualCommit()">Write commit message…</button>
+              <button :disabled="!snapshot.head" @click="manualCommit(true)">Amend last commit…</button>
+            </div>
             <button
               title="Fetch remote changes"
               :disabled="busy || example"
@@ -892,13 +943,6 @@ watch(amend, async (value) => {
             snapshot ? "Local repository" : "Choose a workspace"
           }}</span>
         </div>
-        <button
-          class="icon-button"
-          title="Open repository"
-          @click="w.openRepo()"
-        >
-          <Plus :size="16" />
-        </button>
       </div>
       <div class="sidebar-scroll">
         <template v-if="snapshot">
@@ -906,7 +950,7 @@ watch(amend, async (value) => {
             <button
               :class="{ active: view === 'changes' }"
               :aria-current="view === 'changes' ? 'page' : undefined"
-              @click="view = 'changes'"
+              @click="view = 'changes'; mode = 'working'"
             >
               <Layers :size="16" />Local changes<span class="count">{{
                 snapshot.files.length
@@ -1104,11 +1148,6 @@ watch(amend, async (value) => {
         >
       </div>
       <div class="sidebar-footer">
-        <button @click="w.openRepo()">
-          <FolderOpen :size="15" />Open repository<kbd>Ctrl O</kbd></button
-        ><button v-if="!desktop() && !example" @click="w.showExample()">
-          <Layers :size="15" />Explore example workspace
-        </button>
         <div>
           <span class="status-dot" :class="{ live: t3Connected }" /><span>{{
             t3Connected ? "T3 Code connected" : "Local workspace"
@@ -1177,10 +1216,7 @@ watch(amend, async (value) => {
             <section id="changed-files" class="files-panel">
               <ResizeHandle v-model="preferredFilesWidth" label="Resize changed files" controls="changed-files" storage-key="gitgoblin.filesWidth" :min="180" :max="maxFilesWidth" />
               <div class="files-toolbar">
-              <div class="segmented">
-                <button :class="{ active: mode !== 'branch' }" @click="mode = 'working'">Local changes</button>
-                <button :class="{ active: mode === 'branch' }" :disabled="!base" @click="mode = 'branch'">Compare branch</button>
-              </div>
+                <span class="subtle">Changed files</span>
                 <button class="icon-button file-view-toggle" :aria-label="filesAsTree ? 'Show files as a list' : 'Show files as a tree'" :title="filesAsTree ? 'Show files as a list' : 'Show files as a tree'" :aria-pressed="filesAsTree" @click="filesAsTree = !filesAsTree">
                   <ListTree v-if="filesAsTree" :size="16" /><List v-else :size="16" />
                 </button>
@@ -1293,38 +1329,6 @@ watch(amend, async (value) => {
                 </p>
               </div>
             </section>
-              <div class="commit-box">
-                <textarea
-                  v-model="commitMessage"
-                  aria-label="Commit message"
-                  placeholder="Commit message"
-                  :disabled="example"
-                  @keydown.ctrl.enter.prevent="commit"
-                />
-                <div class="commit-options">
-                  <label
-                    ><input
-                      v-model="amend"
-                      type="checkbox"
-                      :disabled="example || !snapshot.head"
-                    />Amend last commit</label
-                  ><kbd>Ctrl ↵</kbd><span class="staged-count">{{ staged.length }} staged</span>
-                </div>
-                <button
-                  class="primary commit-button"
-                  :disabled="
-                    busy ||
-                    example ||
-                    !commitMessage.trim() ||
-                    (!staged.length && !amend)
-                  "
-                  @click="commit"
-                >
-                  <Check :size="15" />{{
-                    amend ? "Amend" : "Commit"
-                  }}
-                </button>
-              </div>
           </div>
         </template>
         <template v-else-if="view === 'history'"
@@ -1423,11 +1427,7 @@ watch(amend, async (value) => {
           Your branches, changes, and agent conversations.<br />One focused
           workspace, built around your code.
         </p>
-        <button class="primary" @click="w.openRepo()">
-          <FolderOpen :size="17" />Open a repository<kbd>Ctrl O</kbd></button
-        ><button class="text-button" @click="w.showExample()">
-          Explore the example workspace<ArrowUpRight :size="14" />
-        </button>
+        <p>Choose <strong>File → Open repository</strong> to get started.<br /><kbd>Ctrl O</kbd></p>
         <div class="welcome-features">
           <span><GitCommitHorizontal :size="16" />Thoughtful commits</span
           ><span><Layers :size="16" />Parallel worktrees</span
@@ -1527,7 +1527,8 @@ watch(amend, async (value) => {
                 <option v-for="option in field.options" :key="option">
                   {{ option }}
                 </option></select
-              ><input
+              ><textarea v-else-if="(dialog === 'commit' || dialog === 'amend') && field.key === 'text'" v-model="values[field.key]" rows="5" required aria-label="Commit message" />
+              <input
                 v-else
                 v-model="values[field.key]"
                 :disabled="!!rebaseCommits.length"

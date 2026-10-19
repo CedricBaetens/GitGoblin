@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod git;
+mod devops;
 mod preferences;
 mod shell;
 use serde_json::{json, Value};
@@ -14,6 +15,12 @@ use tauri::{Manager, State};
 struct AppState {
     git_lock: Arc<RwLock<()>>,
     t3: Mutex<Option<(String, String)>>,
+}
+
+#[tauri::command]
+async fn devops_tickets(repo: String, query: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || devops::tickets(&repo, &query))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -321,6 +328,7 @@ fn main() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             git_request,
+            devops_tickets,
             t3_discover,
             t3_pair,
             t3_ticket,
