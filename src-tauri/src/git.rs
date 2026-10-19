@@ -266,7 +266,7 @@ fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<u
 }
 
 pub fn is_read_only(action: &str) -> bool {
-    matches!(action, "snapshot" | "status" | "history" | "diff" | "branch-files" | "commit-diff"
+    matches!(action, "discard-plan" | "snapshot" | "status" | "history" | "diff" | "branch-files" | "commit-diff"
         | "commit-message" | "reflog" | "blame" | "conflict" | "rebase-plan")
 }
 
@@ -287,6 +287,38 @@ pub fn main_repository(path: &str) -> Result<String, String> {
 pub fn execute(req: Request) -> Result<Value, String> {
     let repo = root(&req.repo)?;
     let value = match req.action.as_str() {
+        "discard-plan" | "discard-files" => {
+            if req.files.is_empty() { return Err("Choose files to discard.".into()); }
+            let statuses = status(&repo)?;
+            let mut tracked = Vec::new();
+            let mut untracked = Vec::new();
+            let mut plan = Vec::new();
+            for file in &req.files {
+                relative(&file.path)?;
+                let state = statuses.iter().find(|state| state.path == file.path)
+                    .ok_or("A selected file no longer has changes. Refresh and try again.")?;
+                if state.conflict || state.worktree == " " { return Err("Only non-conflicting unstaged changes can be discarded.".into()); }
+                let path = repo.join(&file.path);
+                let parent = path.parent().unwrap().ancestors().find(|path| path.exists()).ok_or("File parent is unavailable.")?;
+                if !fs::canonicalize(parent).map_err(|e| e.to_string())?.starts_with(&repo) {
+                    return Err("File resolves outside this worktree.".into());
+                }
+                let current = fingerprint(&repo, &file.path)?;
+                if req.action == "discard-files" && (file.fingerprint.is_empty() || file.fingerprint != current) {
+                    return Err(format!("{} changed since confirmation. Review the changes and try again.", file.path));
+                }
+                plan.push(json!({"path":file.path,"fingerprint":current}));
+                if state.index == "?" { untracked.push(path); } else { tracked.push(file.path.as_str()); }
+            }
+            if req.action == "discard-plan" { json!(plan) } else {
+                if !tracked.is_empty() {
+                    let input = tracked.iter().flat_map(|path| path.bytes().chain(std::iter::once(0))).collect::<Vec<_>>();
+                    bytes(&repo, &["restore", "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul"], Some(&input))?;
+                }
+                for path in untracked { fs::remove_file(path).map_err(|e| e.to_string())?; }
+                json!(format!("Discarded changes in {} files", req.files.len()))
+            }
+        }
         "stage-files" | "unstage-files" => {
             let stage = req.action == "stage-files";
             bulk::update(&repo, &req.files, stage).map_err(|e| format!("No files were {}. {e}", if stage { "staged" } else { "unstaged" }))?;
@@ -830,6 +862,36 @@ mod tests {
             limit: None,
             files: Vec::new(),
         }
+    }
+    #[test]
+    fn discard_restores_index_preserves_staging_and_rejects_stale_confirmation() {
+        let dir = fixture();
+        let repo = dir.path();
+        fs::create_dir(repo.join("folder")).unwrap();
+        fs::write(repo.join("folder/file.txt"), "original").unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "initial"]).unwrap();
+        fs::write(repo.join("folder/file.txt"), "staged").unwrap();
+        git(repo, &["add", "."]).unwrap();
+        fs::write(repo.join("folder/file.txt"), "unstaged").unwrap();
+        fs::write(repo.join("folder/new [1].txt"), "new").unwrap();
+        fs::write(repo.join("keep.txt"), "keep").unwrap();
+        let mut plan = request(repo, "discard-plan");
+        plan.files = vec![BulkFile { path: "folder/file.txt".into(), fingerprint: String::new() }, BulkFile { path: "folder/new [1].txt".into(), fingerprint: String::new() }];
+        let files = execute(plan).unwrap();
+        let mut discard = request(repo, "discard-files");
+        discard.files = serde_json::from_value(files.clone()).unwrap();
+        fs::write(repo.join("folder/new [1].txt"), "changed").unwrap();
+        assert!(execute(discard).unwrap_err().contains("changed since confirmation"));
+        assert_eq!(fs::read_to_string(repo.join("folder/file.txt")).unwrap(), "unstaged");
+        fs::write(repo.join("folder/new [1].txt"), "new").unwrap();
+        let mut discard = request(repo, "discard-files");
+        discard.files = serde_json::from_value(files).unwrap();
+        execute(discard).unwrap();
+        assert_eq!(fs::read_to_string(repo.join("folder/file.txt")).unwrap(), "staged");
+        assert_eq!(git(repo, &["show", ":folder/file.txt"]).unwrap(), "staged");
+        assert!(!repo.join("folder/new [1].txt").exists());
+        assert!(repo.join("keep.txt").exists());
     }
     #[test]
     fn removes_only_clean_registered_linked_worktrees_and_groups_recent_repositories() {

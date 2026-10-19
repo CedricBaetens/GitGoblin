@@ -315,6 +315,20 @@ const dialog = ref(""),
 const output = ref(""),
   outputTitle = ref(""),
   rebaseCommits = ref<(Commit & { action: string })[]>([]);
+const discardFiles = ref<NonNullable<GitRequest['files']>>([]);
+const discardRepo = ref('');
+async function confirmDiscard(paths: string[]) {
+  if (busy.value || example.value || !paths.length) return;
+  const root = repo.value;
+  try {
+    const files = await w.read<NonNullable<GitRequest['files']>>('discard-plan', { files: paths.map(path => ({ path })) });
+    if (root !== repo.value) return;
+    discardFiles.value = files;
+    discardRepo.value = root;
+    ask('discard-files');
+    dialogDescription.value = `Permanently discard unstaged changes in ${files.length} file${files.length === 1 ? '' : 's'}? Staged changes are kept. New untracked files are deleted. This cannot be undone.`;
+  } catch (e) { error.value = String(e); }
+}
 const conflict = ref<{
     base: string;
     ours: string;
@@ -332,6 +346,7 @@ const definitions: Record<
     defaults?: Record<string, string>;
   }
 > = {
+  'discard-files': { title: 'Discard changes', description: '' },
   "branch-create": {
     title: "Create branch",
     description: "Create a branch at the selected commit.",
@@ -506,6 +521,10 @@ async function executeDialog() {
       return;
     }
     const params: Partial<GitRequest> = { ...values.value };
+    if (dialog.value === 'discard-files') {
+      if (repo.value !== discardRepo.value) throw new Error('The repository changed. Close this dialog and try again.');
+      params.files = discardFiles.value;
+    }
     if (dialog.value === "rebase")
       params.text = rebaseCommits.value
         .map((c) => `${c.action} ${c.id}`)
@@ -1160,7 +1179,7 @@ watch(amend, async (value) => {
               <div v-for="group in fileGroups" :key="group.mode" class="file-group">
                 <div class="file-list-label">{{ group.label }}<span>{{ group.files.length }}</span><button v-if="group.mode !== 'branch'" class="stage-all" :disabled="busy || example || !group.files.length || group.files.some(file => file.conflict)" :title="group.files.some(file => file.conflict) ? 'Resolve conflicting files first' : undefined" @click="toggleFileStage(null, group.mode)">{{ group.mode === 'staged' ? 'Unstage all' : 'Stage all' }}</button></div>
                 <div class="file-list">
-                <FileList :key="repo" :files="group.files" :tree="filesAsTree" :selected="mode === group.mode ? selected : ''" :mode="group.mode" :editable="!busy && !example && group.mode !== 'branch'" :native-actions="desktop() && !example" @open-editor="fileLocation('open_editor', $event)" @reveal="fileLocation('reveal_path', $event)" @copy-full-path="fileLocation('full_path', $event)" @error="error = $event" @select="selectFile($event, group.mode)" @toggle-selection="toggleSelectedFiles($event, group.mode)" @toggle-stage="toggleFileStage($event, group.mode)" @toggle-folder="toggleFileStage($event, group.mode, true)" />
+                <FileList :key="repo" :files="group.files" :tree="filesAsTree" :selected="mode === group.mode ? selected : ''" :mode="group.mode" :editable="!busy && !example && group.mode !== 'branch'" :native-actions="desktop() && !example" @open-editor="fileLocation('open_editor', $event)" @reveal="fileLocation('reveal_path', $event)" @copy-full-path="fileLocation('full_path', $event)" @error="error = $event" @select="selectFile($event, group.mode)" @discard="confirmDiscard" @toggle-selection="toggleSelectedFiles($event, group.mode)" @toggle-stage="toggleFileStage($event, group.mode)" @toggle-folder="toggleFileStage($event, group.mode, true)" />
                 <div v-if="!group.files.length" class="small-empty">
                   <Check :size="23" />
                   <p>
@@ -1530,7 +1549,7 @@ watch(amend, async (value) => {
                 type="submit"
                 class="primary"
                 :class="{
-                  danger: dialog === 'reset' && values.mode === 'hard',
+                  danger: dialog === 'discard-files' || dialog === 'reset' && values.mode === 'hard',
                 }"
                 :disabled="busy || example"
               >

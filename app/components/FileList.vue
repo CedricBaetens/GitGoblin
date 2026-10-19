@@ -7,7 +7,7 @@ import { selectFiles } from '~/lib/file-selection';
 import type { ContextMenuHandle, ContextMenuItem } from '~/lib/context-menu';
 
 const props = defineProps<{ files: FileStatus[]; tree: boolean; selected: string; mode: string; editable?: boolean; nativeActions?: boolean }>();
-const emit = defineEmits<{ select: [path: string]; toggleStage: [path: string]; toggleFolder: [path: string]; toggleSelection: [paths: string[]]; openEditor: [path: string]; reveal: [path: string]; copyFullPath: [path: string]; error: [message: string] }>();
+const emit = defineEmits<{ select: [path: string]; toggleStage: [path: string]; toggleFolder: [path: string]; toggleSelection: [paths: string[]]; discard: [paths: string[]]; openEditor: [path: string]; reveal: [path: string]; copyFullPath: [path: string]; error: [message: string] }>();
 const picked = ref(new Set<string>(props.selected ? [props.selected] : []));
 let anchor = '';
 const selectedPaths = computed(() => props.files.filter(file => picked.value.has(file.path)).map(file => file.path));
@@ -35,6 +35,11 @@ function openMenu(event: MouseEvent | KeyboardEvent, row: { path: string; file?:
   });
   items.push(row.file ? { label: 'View changes', run: () => emit('select', row.path) }
     : { label: `${collapsed.value.has(row.path) ? 'Expand' : 'Collapse'} folder`, run: () => toggle(row.path) });
+  if (props.mode === 'working') items.push({
+    label: row.file && picked.value.size > 1 ? 'Discard selected changes…' : row.file ? 'Discard changes…' : 'Discard folder changes…',
+    separatorBefore: true, danger: true, disabled: !canStage,
+    run: () => emit('discard', row.file ? selectedPaths.value : props.files.filter(file => file.path.startsWith(`${row.path}/`)).map(file => file.path)),
+  });
   items.push(
     { label: row.file ? 'Open in editor' : 'Open folder in editor', separatorBefore: true, disabled: !props.nativeActions || !!row.file && fileChange(row.file, props.mode).kind === 'removed', run: () => emit('openEditor', row.path) },
     { label: 'Reveal in Explorer', disabled: !props.nativeActions, run: () => emit('reveal', row.path) },
