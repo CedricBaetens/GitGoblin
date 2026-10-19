@@ -577,7 +577,8 @@ pub fn execute(req: Request) -> Result<Value, String> {
         }
         "branch-delete" => {
             branch(&repo, &req.target)?;
-            json!(git(&repo, &["branch", "-d", &req.target])?)
+            let flag = if req.mode == "force" { "-D" } else { "-d" };
+            json!(git(&repo, &["branch", flag, &req.target])?)
         }
         "tag-create" => {
             branch(&repo, &req.text)?;
@@ -863,6 +864,42 @@ mod tests {
             files: Vec::new(),
         }
     }
+    #[test]
+    fn branch_deletion_requires_explicit_force_for_unmerged_commits() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["checkout", "-b", "base"]).unwrap();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        git(repo, &["checkout", "-b", "feature/unmerged"]).unwrap();
+        git(repo, &["commit", "--allow-empty", "-m", "unmerged"]).unwrap();
+        let tip = oid(repo, "HEAD").unwrap();
+        git(repo, &["checkout", "base"]).unwrap();
+
+        let delete = |target: &str, mode: &str| {
+            let mut req = request(repo, "branch-delete");
+            req.target = target.into();
+            req.mode = mode.into();
+            execute(req)
+        };
+        assert!(delete("feature/unmerged", "").unwrap_err().contains("not fully merged"));
+        assert_eq!(oid(repo, "feature/unmerged").unwrap(), tip);
+        delete("feature/unmerged", "force").unwrap();
+        assert!(oid(repo, "feature/unmerged").is_err());
+
+        git(repo, &["branch", "merged"]).unwrap();
+        delete("merged", "").unwrap();
+        assert!(oid(repo, "merged").is_err());
+        assert!(delete("base", "force").is_err());
+        assert!(oid(repo, "base").is_ok());
+
+        let worktrees = tempfile::tempdir().unwrap();
+        let linked = worktrees.path().join("linked");
+        git(repo, &["worktree", "add", "-b", "linked", linked.to_str().unwrap()]).unwrap();
+        assert!(delete("linked", "force").is_err());
+        assert!(oid(repo, "linked").is_ok());
+        assert!(delete("--all", "force").unwrap_err().contains("Invalid branch name"));
+    }
+
     #[test]
     fn discard_restores_index_preserves_staging_and_rejects_stale_confirmation() {
         let dir = fixture();

@@ -422,6 +422,28 @@ export function useWorkbench() {
   });
   const isFavorite = (path: string) => favorites.value.some(saved => normalize(saved) === normalize(path));
   const favoriteSaving = ref(false);
+  async function removeRepository(path: string) {
+    if (busy.value || favoriteSaving.value) return;
+    busy.value = true;
+    favoriteSaving.value = true;
+    error.value = "";
+    try {
+      const nextFavorites = favorites.value.filter(saved => normalize(saved) !== normalize(path));
+      const nextRecent = recent.value.filter(saved => normalize(saved) !== normalize(path));
+      if (desktop()) await invoke("favorites_save", { repositories: nextFavorites });
+      else localStorage.setItem("gitgoblin.favorites", JSON.stringify(nextFavorites));
+      favorites.value = nextFavorites;
+      if (desktop()) await invoke("repositories_save", { repositories: nextRecent });
+      else localStorage.setItem("gitgoblin.repositories", JSON.stringify(nextRecent));
+      recent.value = nextRecent;
+      notice.value = "Removed from GitGoblin’s repository list. The folder is still on disk.";
+    } catch (e) {
+      error.value = `Could not remove repository from the list: ${e}`;
+    } finally {
+      favoriteSaving.value = false;
+      busy.value = false;
+    }
+  }
   async function toggleFavorite(path: string) {
     if (favoriteSaving.value) return;
     favoriteSaving.value = true;
@@ -480,6 +502,7 @@ export function useWorkbench() {
     isFavorite,
     toggleFavorite,
     favoriteSaving,
+    removeRepository,
     snapshot,
     commits,
     historyLoading,

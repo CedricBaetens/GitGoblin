@@ -1446,6 +1446,13 @@ small {
   background: #131822;
   border-color: #35405a;
 }
+.modal .force-delete-option {
+  flex-direction: row;
+  align-items: center;
+}
+.modal .force-delete-option input {
+  width: auto;
+}
 .modal-footer {
   display: flex;
   justify-content: flex-end;

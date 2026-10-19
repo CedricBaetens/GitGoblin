@@ -235,6 +235,7 @@ function repositoryContext(event: MouseEvent | KeyboardEvent, path: string) {
     { label: w.isFavorite(path) ? 'Unfavorite repository' : 'Favorite repository', disabled: w.favoriteSaving.value, run: () => w.toggleFavorite(path) },
     { label: 'Reveal in Explorer', separatorBefore: true, disabled: !desktop(), run: () => fileLocation('reveal_path', '', path) },
     { ...copyItem('Copy repository path', path), separatorBefore: true },
+    { label: 'Remove from GitGoblin', separatorBefore: true, disabled: busy.value || w.favoriteSaving.value, run: () => w.removeRepository(path) },
   ]);
 }
 async function fileLocation(action: 'open_editor' | 'reveal_path' | 'full_path', path: string, root = repo.value) {
@@ -372,7 +373,7 @@ const definitions: Record<
   "branch-delete": {
     title: "Delete branch",
     description:
-      "Deletes a merged local branch. Unmerged branches are protected.",
+      "Deletes a local branch. Enable force deletion to delete an unmerged branch. Commits unique to it may be lost. Remote branches are unchanged.",
     fields: [{ key: "target", label: "Branch" }],
   },
   "tag-create": {
@@ -802,6 +803,7 @@ watch(amend, async (value) => {
           </button>
           <button class="icon-button" :aria-label="`Rename ${w.repositoryName(path)}`" title="Rename repository" @click="startRepositoryRename(path)"><Pencil :size="14" /></button>
           <button class="favorite-toggle icon-button" :class="{ favorited: w.isFavorite(path) }" :disabled="w.favoriteSaving.value" :aria-label="`${w.isFavorite(path) ? 'Unfavorite' : 'Favorite'} ${path}`" :aria-pressed="w.isFavorite(path)" @click="w.toggleFavorite(path)"><Star :size="15" :fill="w.isFavorite(path) ? 'currentColor' : 'none'" /></button>
+          <button class="icon-button" :disabled="busy || w.favoriteSaving.value" :aria-label="`Remove ${w.repositoryName(path)} from GitGoblin`" title="Remove from GitGoblin (keeps folder on disk)" @click="w.removeRepository(path)"><X :size="14" /></button>
         </div>
         <p v-if="!recent.length && !favorites.length" class="nav-hint">Opened repositories will appear here.</p>
         <button class="repository-menu-open" :disabled="busy" @click="chooseRepository()"><Plus :size="16" />Open repository...<kbd>Ctrl O</kbd></button>
@@ -1531,6 +1533,10 @@ watch(amend, async (value) => {
                 :disabled="!!rebaseCommits.length"
                 required
             /></label>
+            <label v-if="dialog === 'branch-delete'" class="force-delete-option">
+              <input v-model="values.mode" type="checkbox" true-value="force" false-value="" :disabled="busy" />
+              Force delete even if the branch is not merged
+            </label>
             <div v-if="rebaseCommits.length" class="rebase-list">
               <div v-for="(commit, i) in rebaseCommits" :key="commit.id">
                 <select
@@ -1571,7 +1577,7 @@ watch(amend, async (value) => {
                 type="submit"
                 class="primary"
                 :class="{
-                  danger: dialog === 'discard-files' || dialog === 'reset' && values.mode === 'hard',
+                  danger: dialog === 'discard-files' || dialog === 'branch-delete' || dialog === 'reset' && values.mode === 'hard',
                 }"
                 :disabled="busy || example"
               >
