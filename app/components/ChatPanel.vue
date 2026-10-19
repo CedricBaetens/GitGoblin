@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch, nextTick, useId } from "vue";
 import {
   Bot,
   ArrowUp,
@@ -20,11 +20,13 @@ import {
 } from "lucide-vue-next";
 import { conversationTurns } from '~/lib/conversation-turns';
 import { imageMimeTypes, uploadChatImage, validateChatImages } from '~/lib/chat-images';
+import { insertSkill, searchSkills, skillTrigger } from '~/lib/chat-skills';
+import { pendingQuestions } from '~/lib/chat-questions';
 import { conversationDefaults, conversationPresets, conversationPrompt, newConversationWorktree } from '~/lib/conversation-presets';
 import { isThreadRunning, repositoryThreadKey, repositoryThreads, repositoryThreadSelection } from "~/lib/threads";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop, git } from "~/lib/native";
-import type { T3Thread, T3Project, T3Projection, T3ImageAttachment } from "~/lib/types";
+import type { T3Thread, T3Project, T3Projection, T3ImageAttachment, T3Skill } from "~/lib/types";
 const props = defineProps<{
   context: string;
   example: boolean;
@@ -112,6 +114,56 @@ async function loadImage(attachment: T3ImageAttachment) {
   return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: attachment.mimeType }));
 }
 const composer = ref<HTMLTextAreaElement>();
+const skillMenuId = useId();
+const skillCursor = ref(0), skillIndex = ref(0), skills = ref<T3Skill[]>([]);
+const skillsLoading = ref(false), skillsError = ref(''), skillsDismissed = ref(false);
+const skillMenu = ref<HTMLElement>();
+const trigger = computed(() => skillTrigger(prompt.value, skillCursor.value));
+const skillMenuOpen = computed(() => connected.value && !!thread.value && !props.example && !!trigger.value && !skillsDismissed.value);
+const skillMatches = computed(() => searchSkills(skills.value, trigger.value?.query || ''));
+const skillScope = computed(() => thread.value ? { instanceId: thread.value.modelSelection.instanceId,
+  cwd: thread.value.worktreePath || projects.value.find(project => project.id === thread.value?.projectId)?.workspaceRoot || props.repo } : null);
+const skillCache = new Map<string, T3Skill[]>();
+let skillRequest = 0;
+async function loadSkills(reload = false) {
+  const scope = skillScope.value;
+  const request = ++skillRequest;
+  skills.value = []; skillsError.value = ''; skillsLoading.value = false;
+  if (!scope || !skillMenuOpen.value) return;
+  const key = JSON.stringify(scope);
+  if (!reload && skillCache.has(key)) { skills.value = skillCache.get(key)!; return; }
+  skillsLoading.value = true;
+  try {
+    const result = await client.listSkills(scope.instanceId, scope.cwd);
+    if (request !== skillRequest) return;
+    skillCache.set(key, result); skills.value = result;
+  } catch (e) { if (request === skillRequest) skillsError.value = String(e); }
+  finally { if (request === skillRequest) skillsLoading.value = false; }
+}
+watch([prompt, skillCursor], () => { skillIndex.value = 0; });
+function updateSkillCursor() {
+  skillCursor.value = composer.value?.selectionStart || 0;
+  skillsDismissed.value = false;
+}
+async function chooseSkill(skill: T3Skill) {
+  if (!trigger.value) return;
+  const result = insertSkill(prompt.value, trigger.value, skill.name);
+  prompt.value = result.text; skillCursor.value = result.cursor; skillsDismissed.value = true;
+  await nextTick(); composer.value?.focus(); composer.value?.setSelectionRange(result.cursor, result.cursor);
+}
+function composerKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void send(); return; }
+  if (!skillMenuOpen.value) return;
+  if (event.key === 'Escape') { event.preventDefault(); skillsDismissed.value = true; return; }
+  if (['ArrowDown', 'ArrowUp'].includes(event.key) && skillMatches.value.length) {
+    event.preventDefault();
+    skillIndex.value = (skillIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + skillMatches.value.length) % skillMatches.value.length;
+    void nextTick(() => skillMenu.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }));
+  } else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && skillMatches.value[skillIndex.value]) {
+    event.preventDefault(); void chooseSkill(skillMatches.value[skillIndex.value]!);
+  }
+}
 const conversationBody = ref<HTMLElement>();
 let followMessages = true;
 async function scrollToLatest() {
@@ -137,10 +189,13 @@ const messages = computed(() =>
 watch(messages, () => void scrollToLatest(), { flush: 'post', deep: true });
 const requests = computed(
   () =>
-    projection.value?.runtimeRequests.filter((r) => r.status === "pending") ||
+    projection.value?.runtimeRequests.filter((r) => r.status === "pending" && r.kind !== 'user_input') ||
     [],
 );
+const questions = computed(() => pendingQuestions(projection.value));
+watch(questions, () => void scrollToLatest(), { flush: 'post' });
 const connected = computed(() => state.value === "connected");
+watch([skillMenuOpen, () => JSON.stringify(skillScope.value)], () => void loadSkills());
 const streaming = computed(() => messages.value.some(message => message.role === 'assistant' && message.streaming));
 const busy = computed(() => !!thread.value?.activeRunId || ['starting', 'running', 'busy'].includes(thread.value?.status || '') || streaming.value);
 const turns = computed(() => conversationTurns(projection.value, busy.value ? thread.value?.activeRunId || 'active' : null));
@@ -486,6 +541,8 @@ defineExpose({
             <ChatMarkdown :text="turn.final.text" :streaming="turn.final.streaming" />
           </div>
         </template>
+        <ChatQuestions v-for="question in questions" :key="`${selectedId}:${question.id}`" :request="question"
+          :disabled="!connected" :respond="answers => client.answerQuestions(selectedId, question.id, answers)" />
         <div v-for="request in requests" :key="request.id" class="approval">
           <strong><ShieldCheck :size="15" />{{ request.kind }}</strong>
           <pre>{{
@@ -564,13 +621,29 @@ defineExpose({
           <X :size="12" />
         </button>
       </div>
+      <div v-if="skillMenuOpen" :id="skillMenuId" ref="skillMenu" class="skill-menu" role="listbox" aria-label="Skills">
+        <div class="skill-menu-heading"><span>Skills</span><button type="button" :disabled="skillsLoading" aria-label="Refresh skills" @mousedown.prevent @click="loadSkills(true)">Refresh</button></div>
+        <p v-if="skillsLoading" role="status">Loading skills…</p>
+        <p v-else-if="skillsError" role="status">{{ skillsError }}</p>
+        <p v-else-if="!skillMatches.length" role="status">No matching skills.</p>
+        <button v-for="(skill, index) in skillMatches" :id="`${skillMenuId}-${index}`" :key="skill.name" :title="skill.name" type="button" role="option" tabindex="-1"
+          :aria-selected="index === skillIndex" @mousedown.prevent @click="chooseSkill(skill)">
+          <span class="skill-menu-label"><strong>/{{ skill.displayName || skill.name.split(':').at(-1) }}</strong><span v-if="skill.name.includes(':') && skill.name.split(':')[0] !== skill.name.split(':').at(-1)" class="skill-source">{{ skill.name.split(':').slice(0, -1).join(':') }}</span></span>
+          <small>{{ skill.shortDescription || skill.description || 'Run skill' }}</small>
+        </button>
+      </div>
       <textarea
         ref="composer"
         v-model="prompt"
         :disabled="!connected || !thread || example"
         placeholder="Give an instruction…"
         aria-label="Agent instruction"
-        @keydown.ctrl.enter.prevent="send"
+        role="combobox" aria-autocomplete="list" :aria-expanded="skillMenuOpen" :aria-controls="skillMenuOpen ? skillMenuId : undefined"
+        :aria-activedescendant="skillMenuOpen && skillMatches.length ? `${skillMenuId}-${skillIndex}` : undefined"
+        @input="updateSkillCursor" @click="updateSkillCursor" @focus="updateSkillCursor"
+        @blur="skillsDismissed = true"
+        @keyup="!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes($event.key) && updateSkillCursor()"
+        @keydown="composerKeydown"
         @paste="pasteImages"
       />
       <div class="composer-footer">
@@ -692,6 +765,19 @@ defineExpose({
 </template>
 
 <style scoped>
+.composer { position: relative; }
+.skill-menu { position: absolute; z-index: 20; bottom: calc(100% + 6px); left: 0; right: 0; max-height: 260px; overflow-y: auto; padding: 5px; background: #191b21; border: 1px solid #30333e; border-radius: 8px; box-shadow: 0 8px 24px #0005; scrollbar-width: thin; }
+.skill-menu-heading { display: flex; align-items: center; justify-content: space-between; padding: 2px 7px 5px; margin-bottom: 3px; border-bottom: 1px solid #ffffff08; color: #858b99; font-size: 10px; }
+.skill-menu-heading button { padding: 3px 5px; font-size: 10px; color: #858b99; }
+.skill-menu > button { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 3px; width: 100%; text-align: left; padding: 8px 9px; border-radius: 5px; white-space: normal; }
+.skill-menu > button[aria-selected="true"] { background: #ffffff08; box-shadow: inset 2px 0 #a7b6ff; }
+.skill-menu > button:hover { background: #ffffff0c; }
+.skill-menu-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.skill-menu strong { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; font-family: inherit; color: #d9dce5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-source { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; color: #747b8b; }
+.skill-menu small, .skill-menu > p { font-size: 11px; color: #8f96a6; line-height: 1.4; }
+.skill-menu small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-menu > p { padding: 8px; margin: 0; }
 .pasted-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .pasted-images figure { position: relative; margin: 0; }
 .pasted-images img { display: block; width: 72px; height: 64px; object-fit: cover; border: 1px solid var(--line); border-radius: 6px; }

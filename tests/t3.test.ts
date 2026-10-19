@@ -37,6 +37,35 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it('loads skills for the exact provider and worktree', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const loading = client.listSkills('codex', 'D:/feature');
+    const command = socket.sent.at(-1);
+    expect(command).toMatchObject({ tag: 'server.refreshProviders', payload: { instanceId: 'codex', cwd: 'D:/feature' } });
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: { providers: [{ instanceId: 'codex',
+      skills: [{ name: 'global', enabled: true }], workspaceSnapshots: [{ cwd: 'D:/feature', skills: [{ name: 'triage', enabled: true, userInvocationOnly: true }] }],
+    }] } } });
+    expect((await loading).map(skill => skill.name)).toEqual(['triage']);
+  });
+  it.each([false, true])('responds to questions with native answer values (legacy=%s)', async legacy => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [{ kind: 'snapshot', snapshot: {
+      ...(legacy ? { snapshotSequence: 1 } : { schemaVersion: 2 }), projects: [], threads: [],
+    } }] });
+    const answers = { scope: ['web', 'server'], detail: 'Keep current behavior' };
+    const responding = client.answerQuestions('one', 'input', answers);
+    const command = socket.sent.at(-1);
+    expect(command.payload).toMatchObject({ type: legacy ? 'thread.user-input.respond' : 'runtime-request.respond', threadId: 'one', requestId: 'input', answers });
+    expect(command.payload.decision).toBeUndefined();
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: {} } });
+    await responding;
+  });
   it.each([false, true])('sends uploaded image attachments without requiring text (legacy=%s)', async legacy => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);

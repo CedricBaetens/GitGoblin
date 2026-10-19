@@ -102,6 +102,30 @@ export interface T3Request {
   status: string;
   responseCapability: { type: string; reason?: string };
 }
+export interface T3Skill {
+  name: string;
+  description?: string;
+  shortDescription?: string;
+  displayName?: string;
+  path: string;
+  enabled: boolean;
+  userInvocable?: boolean;
+}
+export interface T3Question {
+  id: string;
+  header: string;
+  question: string;
+  options: { label: string; description?: string; value?: string }[];
+  multiSelect?: boolean;
+  allowCustomAnswer?: boolean;
+  initialAnswer?: string;
+  required?: boolean;
+}
+export interface T3QuestionRequest {
+  id: string;
+  questions: T3Question[];
+  unavailableReason?: string;
+}
 export interface T3Projection {
   thread: T3Thread;
   messages: T3Message[];
@@ -116,5 +140,5 @@ export interface T3Activity {
   tone: string;
   turnId: string | null;
   createdAt: string;
-  payload?: { toolCallId?: string; status?: string; title?: string };
+  payload?: { toolCallId?: string; status?: string; title?: string; requestId?: string; questions?: T3Question[]; responseMode?: string };
 }

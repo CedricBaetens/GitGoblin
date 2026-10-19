@@ -1,4 +1,5 @@
 import type { T3Project, T3Thread, T3Projection, T3ImageAttachment } from "./types";
+import { availableSkills } from './chat-skills';
 
 type Json = Record<string, any>;
 type Pending = {
@@ -365,6 +366,17 @@ export class T3Client {
   }
   dispatch(command: Json) {
     return this.call("orchestration.dispatchCommand", command);
+  }
+  async listSkills(instanceId: string, cwd: string) {
+    const result = await this.call('server.refreshProviders', { instanceId, cwd });
+    return availableSkills(result.providers?.find((provider: Json) => provider.instanceId === instanceId), cwd);
+  }
+  answerQuestions(threadId: string, requestId: string, answers: Record<string, string | string[]>) {
+    return this.dispatch({
+      type: this.legacyProtocol ? 'thread.user-input.respond' : 'runtime-request.respond',
+      commandId: crypto.randomUUID(), threadId, requestId, answers,
+      ...(this.legacyProtocol ? { createdAt: new Date().toISOString() } : {}),
+    });
   }
   sendMessage(thread: T3Thread, text: string, attachments: T3ImageAttachment[] = []) {
     const titleSeed = text.trim() && (thread.title === "New conversation" || thread.title === "New thread") && (this.untitledThreads.has(thread.id) || (
