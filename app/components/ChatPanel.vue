@@ -318,30 +318,6 @@ async function openCreatedConversation(id: string, text: string, path: string) {
   await nextTick();
   composer.value?.focus();
 }
-async function runInstruction(repo: string, instruction: string) {
-  if (!connected.value) throw new Error("Connect T3 Code to run this action.");
-  let target = repositoryThreads(thread.value ? [thread.value] : [], projects.value, repo)[0];
-  const existing = !!target;
-  if (!target) {
-    const defaults = conversationDefaults(repo, projects.value, thread.value);
-    const modelSelection = defaults.modelSelection || (modelOptions.value[0] ? JSON.parse(modelOptions.value[0].value) : undefined);
-    if (!defaults.projectId || !modelSelection) throw new Error("Configure a T3 conversation for this worktree before running this action.");
-    const { threadId } = await client.createThread(defaults.projectId, "New conversation", modelSelection, repo);
-    await openCreatedConversation(threadId, instruction, repo);
-    target = { id: threadId, projectId: defaults.projectId, title: "New conversation", modelSelection,
-      worktreePath: repo, branch: null, status: "idle", activeRunId: null, runtimeMode: "full-access", interactionMode: "default" };
-  }
-  sending.value = true;
-  try {
-    await client.sendMessage(target, instruction);
-    if (!existing) {
-      drafts.delete(target.id);
-      if (selectedId.value === target.id && prompt.value === instruction) prompt.value = "";
-    }
-  } finally {
-    sending.value = false;
-  }
-}
 async function create(preset: (typeof conversationPresets)[number]) {
   if (!canCreate.value) return;
   creating.value = true;
@@ -462,7 +438,6 @@ onUnmounted(() => {
 defineExpose({
   select,
   newConversation: newChat,
-  runInstruction,
   focusComposer: () => composer.value?.focus(),
   stopAll: async () => {
     for (const t of matchingThreads.value.filter((t) => t.activeRunId))

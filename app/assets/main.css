@@ -176,9 +176,6 @@ small {
 .file-menu { position: fixed; inset: 44px auto auto calc(var(--sidebar) - 70px); margin: 5px 0 0; width: 270px; max-width: calc(100vw - 32px); padding: 5px; color: #d5d7df; background: #1b1e26; border: 1px solid #353c4b; border-radius: 7px; box-shadow: 0 12px 40px #0008; }
 .file-menu > button { width: 100%; justify-content: flex-start; font-size: 12px; }
 .file-menu kbd { margin-left: auto; }
-.commit-actions { display: flex; align-items: center; gap: 2px; }
-.commit-menu { position: fixed; inset: 44px auto auto 16px; margin: 5px 0 0; width: 235px; padding: 5px; color: #d5d7df; background: #1b1e26; border: 1px solid #353c4b; border-radius: 7px; box-shadow: 0 12px 40px #0008; }
-.commit-menu > button { width: 100%; justify-content: flex-start; font-size: 12px; }
 .titlebar-context {
   display: flex;
   align-items: center;
@@ -515,6 +512,11 @@ small {
   min-height: 0;
   background: #141519;
 }
+.commit-form { display: flex; flex-direction: column; gap: 9px; flex-shrink: 0; padding: 14px 12px; border-top: 1px solid var(--line); }
+.commit-form > label { font-size: 12px; color: #c5cfe0; }
+.commit-form textarea { width: 100%; min-height: 100px; max-height: 240px; resize: vertical; font-size: 12px; line-height: 1.6; }
+.commit-form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.commit-form-actions button { font-size: 11px; }
 .segmented {
   display: flex;
   background: #101115;

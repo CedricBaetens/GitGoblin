@@ -5,7 +5,6 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitMerge,
-  GitPullRequest,
   History,
   FolderOpen,
   FolderGit2,
@@ -43,7 +42,6 @@ import {
 import { useWorkbench } from "~/composables/useWorkbench";
 import { branchTree } from "~/lib/branches";
 import { isThreadRunning, visibleThreads } from "~/lib/threads";
-import { commitInstruction, type CommitContext } from "~/lib/commit-instruction";
 import { desktop, invoke } from "~/lib/native";
 import { clampSidebarWidth, defaultSidebarWidth, maxSidebarWidth, minSidebarWidth, sidebarKeyboardWidth } from '~/lib/sidebar';
 import type { Commit, T3Thread, T3Project, GitRequest, GitRef } from "~/lib/types";
@@ -251,7 +249,6 @@ const sidebarPositions = { git: 0, chat: 0 };
 watch(workspaceMode, (mode) => {
   menu.value = false;
   sidebarMenu.value?.close();
-  commitOptionsMenu.value?.hidePopover();
   try { localStorage.setItem('gitgoblin.workspaceMode', mode); } catch { /* Modes work without storage. */ }
 });
 watch(workspaceMode, async (mode, previous) => {
@@ -261,11 +258,15 @@ watch(workspaceMode, async (mode, previous) => {
 });
 const chatNeedsAttention = ref(false);
 const context = ref(""),
-  chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; runInstruction: (repo: string, instruction: string) => Promise<void>; stopAll: () => Promise<void>; focusComposer: () => void }>(),
-  committing = ref(false),
-  requestingPr = ref(false),
-  commitOptionsMenu = ref<HTMLDivElement>(),
+  chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
   menu = ref(false);
+const commitMessages = ref<Record<string, string>>({});
+const commitMessage = computed({
+  get: () => commitMessages.value[normalized(repo.value)] || '',
+  set: (message: string) => { commitMessages.value[normalized(repo.value)] = message; },
+});
+const canCommit = computed(() => !busy.value && !example.value && !!staged.value.length
+  && !!commitMessage.value.trim() && !snapshot.value?.files.some(file => file.conflict));
 async function openNewConversation(event: MouseEvent) {
   const trigger = event.currentTarget as HTMLButtonElement;
   chatVisible.value = true;
@@ -531,10 +532,6 @@ const definitions: Record<
     description: "Create a commit from the index.",
     fields: [{ key: "text", label: "Commit message" }],
   },
-  'auto-commit': {
-    title: "Commit staged changes",
-    description: "An agent will inspect the staged changes, generate a message, run relevant checks, and create the commit.",
-  },
   amend: {
     title: "Amend last commit",
     description:
@@ -558,11 +555,6 @@ async function executeDialog() {
   if (!dialog.value) return;
   dialogError.value = "";
   try {
-    if (dialog.value === 'auto-commit') {
-      if (await commit(true)) dialog.value = '';
-      else dialogError.value = error.value;
-      return;
-    }
     if (dialog.value === 'worktree-remove' && threads.value.some(thread => thread.activeRunId && normalized(thread.worktreePath || projects.value.find(project => project.id === thread.projectId)?.workspaceRoot || '') === normalized(values.value.path || ''))) {
       throw new Error('Stop the agent using this worktree before removing it.');
     }
@@ -583,7 +575,10 @@ async function executeDialog() {
       params.text = rebaseCommits.value
         .map((c) => `${c.action} ${c.id}`)
         .join("\n");
-    await w.mutate(dialog.value, params);
+    const action = dialog.value;
+    const root = normalized(repo.value);
+    await w.mutate(action, params);
+    if (action === 'commit') commitMessages.value[root] = '';
     dialog.value = "";
   } catch (e) {
     dialogError.value = String(e);
@@ -637,48 +632,22 @@ async function patch(text: string) {
     });
   } catch {}
 }
-async function commit(confirmed = false) {
-  if (busy.value || committing.value || requestingPr.value || example.value || !staged.value.length) return false;
-  if (activeAgents.value.length && !confirmed) { ask('auto-commit'); return false; }
-  committing.value = true;
-  error.value = '';
+async function commit() {
+  if (!canCommit.value) return;
+  if (activeAgents.value.length) { ask('commit', { text: commitMessage.value }); return; }
+  const root = normalized(repo.value);
+  const text = commitMessage.value;
   try {
-    if (snapshot.value?.files.some(file => file.conflict)) throw new Error('Resolve conflicts before committing.');
-    const root = repo.value;
-    const context = await w.read<CommitContext>('commit-context');
-    if (root !== repo.value) throw new Error('The repository changed. Retry Commit in the intended repository.');
-    chatVisible.value = true;
-    await nextTick();
-    if (!chat.value) throw new Error('The conversation panel is unavailable.');
-    await chat.value.runInstruction(root, commitInstruction(root, context));
-    notice.value = 'Commit task started. Follow its progress in the conversation.';
-    return true;
-  } catch (e) {
-    error.value = String(e);
-    return false;
-  } finally {
-    committing.value = false;
-  }
+    await w.mutate('commit', { text });
+    if (commitMessages.value[root] === text) commitMessages.value[root] = '';
+  } catch { /* Keep the message for retry; the workbench displays Git's error. */ }
 }
-async function pullRequest() {
-  if (busy.value || committing.value || requestingPr.value || example.value) return;
-  requestingPr.value = true;
-  error.value = '';
+async function amendCommit() {
+  if (busy.value || example.value || !snapshot.value?.head) return;
   const root = repo.value;
   try {
-    chatVisible.value = true;
-    await nextTick();
-    if (!chat.value) throw new Error('The conversation panel is unavailable.');
-    await chat.value.runInstruction(root, '/pr\n\nCreate or update a pull request for the current branch using this conversation’s context.');
-    notice.value = 'Pull request task started. Follow its progress in the conversation.';
-  } catch (e) { error.value = String(e); }
-  finally { requestingPr.value = false; }
-}
-async function manualCommit(amending = false) {
-  commitOptionsMenu.value?.hidePopover();
-  try {
-    const text = amending ? await w.read<string>('commit-message', { target: 'HEAD' }) : '';
-    ask(amending ? 'amend' : 'commit', { text });
+    const text = await w.read<string>('commit-message', { target: 'HEAD' });
+    if (root === repo.value) ask('amend', { text });
   } catch (e) { error.value = String(e); }
 }
 function addContext(text: string) {
@@ -875,20 +844,6 @@ onUnmounted(() => {
         <p v-if="!recent.length && !favorites.length" class="nav-hint">Opened repositories will appear here.</p>
       </div>
           <div v-if="snapshot && !chatVisible" class="toolbar-actions" aria-label="Git actions">
-            <div class="commit-actions" data-tauri-drag-region="false">
-              <button class="primary" :disabled="busy || committing || requestingPr || example || !staged.length || !t3Connected"
-                :title="t3Connected ? 'Generate a message and commit staged changes' : 'Connect T3 Code for automatic commits; manual messages are in Commit options'"
-                @click="commit()"><GitCommitHorizontal :size="15" />{{ committing ? 'Starting…' : 'Commit' }}<small v-if="staged.length">{{ staged.length }}</small></button>
-              <button aria-label="Commit options" aria-haspopup="true" :disabled="busy || committing || requestingPr || example" @click="toggleTopMenu(commitOptionsMenu, $event)"><ChevronDown :size="13" /></button>
-            </div>
-            <div id="commit-menu" ref="commitOptionsMenu" popover class="commit-menu" data-tauri-drag-region="false" aria-label="Commit options">
-              <button :disabled="!staged.length" @click="manualCommit()">Write commit message…</button>
-              <button :disabled="!snapshot.head" @click="manualCommit(true)">Amend last commit…</button>
-            </div>
-            <button class="pull-request-action secondary" :disabled="busy || committing || requestingPr || example || !t3Connected"
-              title="Create or update a pull request with the pr skill" @click="pullRequest">
-              <GitPullRequest :size="15" />{{ requestingPr ? 'Starting…' : 'Pull request' }}
-            </button>
             <button
               title="Fetch remote changes"
               :disabled="busy || example"
@@ -1060,7 +1015,7 @@ onUnmounted(() => {
                 v-else
                 :size="12"
               />Conversations</button>
-              <button class="icon-button" aria-label="New chat" title="New chat" aria-haspopup="dialog" :disabled="example || busy || committing || requestingPr" @click="openNewConversation"><Plus :size="16" /></button>
+              <button class="icon-button" aria-label="New chat" title="New chat" aria-haspopup="dialog" :disabled="example || busy" @click="openNewConversation"><Plus :size="16" /></button>
             </div>
             <template v-if="sections.chats"
               ><template v-if="example"
@@ -1299,6 +1254,14 @@ onUnmounted(() => {
                 </div>
               </div>
               </div>
+              <form v-show="!chatVisible && mode !== 'branch'" class="commit-form" aria-label="Commit staged changes" @submit.prevent="commit">
+                <label for="commit-message">Commit message</label>
+                <textarea id="commit-message" v-model="commitMessage" :disabled="busy || example" rows="4" placeholder="Summary&#10;&#10;Description (optional)" @keydown.ctrl.enter.prevent="commit" @keydown.meta.enter.prevent="commit" />
+                <div class="commit-form-actions">
+                  <button type="button" class="text-button" :disabled="busy || example || !snapshot.head" @click="amendCommit">Amend last commit…</button>
+                  <button type="submit" class="primary" :disabled="!canCommit" title="Commit staged changes (Ctrl+Enter)"><GitCommitHorizontal :size="14" />Commit staged</button>
+                </div>
+              </form>
             </section>
             <section class="review-panel">
               <template v-if="selected"

@@ -267,7 +267,7 @@ fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<u
 
 pub fn is_read_only(action: &str) -> bool {
     matches!(action, "discard-plan" | "snapshot" | "status" | "history" | "diff" | "branch-files" | "commit-diff"
-        | "commit-message" | "commit-context" | "reflog" | "blame" | "conflict" | "rebase-plan")
+        | "commit-message" | "reflog" | "blame" | "conflict" | "rebase-plan")
 }
 
 fn worktrees(repo: &Path) -> Result<Vec<Value>, String> {
@@ -452,16 +452,6 @@ pub fn execute(req: Request) -> Result<Value, String> {
         "commit-message" => {
             let target = oid(&repo, &req.target)?;
             json!(git(&repo, &["show", "-s", "--format=%B", &target])?)
-        }
-        "commit-context" => {
-            let staged = git(&repo, &["diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "--no-ext-diff"])?;
-            if staged.trim().is_empty() {
-                return Err("Stage changes before committing.".into());
-            }
-            json!({
-                "head": git(&repo, &["rev-parse", "--verify", "HEAD"]).ok().map(|head| head.trim().to_string()),
-                "staged": staged,
-            })
         }
         "stage" | "unstage" => {
             check_fingerprint(&repo, &req)?;
@@ -898,23 +888,22 @@ mod tests {
         }
     }
     #[test]
-    fn commit_context_captures_only_the_index_without_staging_working_changes() {
+    fn manual_commit_uses_the_message_and_only_staged_content() {
         let dir = fixture();
         let repo = dir.path();
-        std::fs::write(repo.join("file.txt"), "staged\n").unwrap();
+        fs::write(repo.join("file.txt"), "staged\n").unwrap();
         git(repo, &["add", "file.txt"]).unwrap();
-        std::fs::write(repo.join("file.txt"), "unstaged\n").unwrap();
-        let staged = git(repo, &["diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "--no-ext-diff"]).unwrap();
-        let unstaged = git(repo, &["diff"]).unwrap();
-        let context = execute(request(repo, "commit-context")).unwrap();
-        assert!(context["head"].is_null());
-        assert_eq!(context["staged"], staged);
-        assert_eq!(git(repo, &["diff"]).unwrap(), unstaged);
-        git(repo, &["commit", "-m", "initial"]).unwrap();
-        assert!(execute(request(repo, "commit-context")).is_err());
-        git(repo, &["add", "file.txt"]).unwrap();
-        let context = execute(request(repo, "commit-context")).unwrap();
-        assert_eq!(context["head"], git(repo, &["rev-parse", "HEAD"]).unwrap().trim());
+        fs::write(repo.join("file.txt"), "unstaged\n").unwrap();
+        let mut req = request(repo, "commit");
+        req.text = "   ".into();
+        assert!(execute(req).is_err());
+        let mut req = request(repo, "commit");
+        req.text = "Add file\n\nKeep local edits out of the commit.".into();
+        execute(req).unwrap();
+        assert_eq!(git(repo, &["show", "HEAD:file.txt"]).unwrap(), "staged\n");
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "unstaged\n");
+        assert_eq!(git(repo, &["log", "-1", "--format=%B"]).unwrap().trim(), "Add file\n\nKeep local edits out of the commit.");
+        assert!(git(repo, &["diff", "--cached"]).unwrap().is_empty());
     }
     #[test]
     fn force_push_rewrites_history_but_preserves_unseen_remote_commits() {
