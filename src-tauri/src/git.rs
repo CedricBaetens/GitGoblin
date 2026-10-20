@@ -577,8 +577,24 @@ pub fn execute(req: Request) -> Result<Value, String> {
             json!(git(&repo, &args)?)
         }
         "switch" => {
-            branch(&repo, &req.target)?;
-            json!(git(&repo, &["switch", &req.target])?)
+            if let Some(remote) = req.target.strip_prefix("refs/remotes/") {
+                oid(&repo, &req.target)?;
+                let (_, name) = remote.split_once('/').ok_or("Choose a remote branch.")?;
+                branch(&repo, name)?;
+                if git(&repo, &["symbolic-ref", "-q", &req.target]).is_ok() {
+                    return Err("Choose a remote branch rather than the remote HEAD reference.".into());
+                }
+                let local = format!("refs/heads/{name}");
+                let upstream = git(&repo, &["for-each-ref", "--format=%(upstream)", &local])?;
+                if upstream.trim() == req.target {
+                    json!(git(&repo, &["switch", name])?)
+                } else {
+                    json!(git(&repo, &["switch", "--track", "-c", name, &req.target])?)
+                }
+            } else {
+                branch(&repo, &req.target)?;
+                json!(git(&repo, &["switch", &req.target])?)
+            }
         }
         "branch-create" => {
             branch(&repo, &req.text)?;
@@ -933,6 +949,50 @@ mod tests {
         git(repo, &["commit", "--amend", "--allow-empty", "-m", "rewritten again"]).unwrap();
         assert!(push("force").unwrap_err().contains("stale info"));
         assert_eq!(oid(remote.path(), "main").unwrap(), unseen.trim());
+    }
+
+    #[test]
+    fn remote_checkout_creates_tracking_branch_and_protects_existing_work() {
+        let dir = fixture();
+        let repo = dir.path();
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "--bare"]).unwrap();
+        git(repo, &["remote", "add", "origin", remote.path().to_str().unwrap()]).unwrap();
+        fs::write(repo.join("file.txt"), "initial\n").unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "initial"]).unwrap();
+        git(repo, &["branch", "base"]).unwrap();
+        git(repo, &["push", "origin", "HEAD:refs/heads/feature/nested"]).unwrap();
+        let checkout = || {
+            let mut req = request(repo, "switch");
+            req.target = "refs/remotes/origin/feature/nested".into();
+            execute(req)
+        };
+        checkout().unwrap();
+        assert_eq!(git(repo, &["branch", "--show-current"]).unwrap().trim(), "feature/nested");
+        assert_eq!(git(repo, &["rev-parse", "--symbolic-full-name", "@{upstream}"]).unwrap().trim(), "refs/remotes/origin/feature/nested");
+        fs::write(repo.join("file.txt"), "feature\n").unwrap();
+        git(repo, &["commit", "-am", "feature"]).unwrap();
+        let tip = oid(repo, "HEAD").unwrap();
+        git(repo, &["switch", "base"]).unwrap();
+        fs::write(repo.join("file.txt"), "unsaved\n").unwrap();
+        assert!(checkout().is_err());
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "unsaved\n");
+        fs::write(repo.join("file.txt"), "initial\n").unwrap();
+        checkout().unwrap();
+        assert_eq!(oid(repo, "HEAD").unwrap(), tip);
+        git(repo, &["switch", "base"]).unwrap();
+        git(repo, &["branch", "--unset-upstream", "feature/nested"]).unwrap();
+        assert!(checkout().is_err());
+        assert_eq!(oid(repo, "feature/nested").unwrap(), tip);
+        assert_eq!(git(repo, &["branch", "--show-current"]).unwrap().trim(), "base");
+        git(repo, &["branch", "-D", "feature/nested"]).unwrap();
+        fs::write(repo.join("file.txt"), "base changed\n").unwrap();
+        git(repo, &["commit", "-am", "base changed"]).unwrap();
+        fs::write(repo.join("file.txt"), "unsaved again\n").unwrap();
+        assert!(checkout().is_err());
+        assert!(oid(repo, "refs/heads/feature/nested").is_err());
+        assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "unsaved again\n");
     }
 
     #[test]

@@ -20,8 +20,6 @@ import {
   RefreshCw,
   Search,
   Settings2,
-  PanelRightClose,
-  PanelRightOpen,
   X,
   Check,
   ArrowUpRight,
@@ -44,7 +42,7 @@ import {
 } from "lucide-vue-next";
 import { useWorkbench } from "~/composables/useWorkbench";
 import { branchTree } from "~/lib/branches";
-import { visibleThreads } from "~/lib/threads";
+import { isThreadRunning, visibleThreads } from "~/lib/threads";
 import { commitInstruction, type CommitContext } from "~/lib/commit-instruction";
 import { desktop, invoke } from "~/lib/native";
 import { clampSidebarWidth, defaultSidebarWidth, maxSidebarWidth, minSidebarWidth, sidebarKeyboardWidth } from '~/lib/sidebar';
@@ -78,27 +76,22 @@ const {
 } = w;
 const filesAsTree = ref(true);
 const preferredSidebarWidth = ref(defaultSidebarWidth);
-const sidebarViewport = ref(1280), sidebarChatWidth = ref(350);
-const preferredChatWidth = ref<number>();
+const sidebarViewport = ref(1280);
 const preferredFilesWidth = ref<number>();
 const preferredDetailsHeight = ref<number>();
 const workspace = ref<HTMLElement>();
 const workspaceSize = ref({ width: 800, height: 700 });
 let workspaceObserver: ResizeObserver | undefined;
-const chatDocked = computed(() => sidebarViewport.value > (snapshot.value ? 1100 : 1000));
-const maxChatWidth = computed(() => Math.max(280, Math.min(800, sidebarViewport.value - (chatDocked.value ? preferredSidebarWidth.value + 400 : 32))));
-const chatWidth = computed(() => Math.max(280, Math.min(maxChatWidth.value, preferredChatWidth.value ?? (chatDocked.value ? sidebarChatWidth.value : 320))));
 const maxFilesWidth = computed(() => Math.max(180, Math.min(520, workspaceSize.value.width - 280)));
 const filesWidth = computed(() => preferredFilesWidth.value === undefined ? undefined : Math.max(180, Math.min(maxFilesWidth.value, preferredFilesWidth.value)));
 const maxDetailsHeight = computed(() => Math.max(170, workspaceSize.value.height - 250));
 const detailsHeight = computed(() => preferredDetailsHeight.value === undefined ? undefined : Math.max(170, Math.min(maxDetailsHeight.value, preferredDetailsHeight.value)));
 const resizingSidebar = ref(false);
-const sidebarRoom = computed(() => sidebarViewport.value - (chatVisible.value && chatDocked.value ? chatWidth.value : 0));
+const sidebarRoom = sidebarViewport;
 const sidebarWidth = computed(() => clampSidebarWidth(preferredSidebarWidth.value, sidebarRoom.value));
 let sidebarPointer: number | undefined, sidebarStartX = 0, sidebarStartWidth = 0;
 function updateSidebarViewport() {
   sidebarViewport.value = window.innerWidth;
-  sidebarChatWidth.value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--chat')) || 350;
 }
 function saveSidebarWidth() {
   try { localStorage.setItem('gitgoblin.sidebarWidth', String(preferredSidebarWidth.value)); } catch { /* Resizing remains available without storage. */ }
@@ -169,11 +162,12 @@ function branchMenu(event: MouseEvent | KeyboardEvent, branch: GitRef) {
   const local = branch.name.startsWith('refs/heads/');
   const target = local ? branch.name.replace('refs/heads/', '') : branch.name;
   const items = [
-    ...(local ? [{ label: 'Switch to branch', disabled: branch.current || busy.value || example.value, run: () => switchBranch(branch) }, {
+    { label: 'Switch to branch', disabled: branch.current || busy.value || example.value, run: () => switchBranch(branch) },
+    ...(local ? [{
       label: 'Compare with working tree', disabled: busy.value || example.value,
       run: () => { base.value = target; mode.value = 'branch'; view.value = 'changes'; },
     }] : []),
-    { ...actionItem('Merge into current branch…', 'merge', { target }, branch.current), separatorBefore: local },
+    { ...actionItem('Merge into current branch…', 'merge', { target }, branch.current), separatorBefore: true },
     actionItem('Rebase current branch onto this…', 'rebase-onto', { target }, branch.current),
     { ...actionItem('Create branch here…', 'branch-create', { target }), separatorBefore: true },
     ...(local ? [{ ...actionItem('Delete branch…', 'branch-delete', { target }, branch.current), danger: true }] : []),
@@ -247,8 +241,26 @@ async function fileLocation(action: 'open_editor' | 'reveal_path' | 'full_path',
   } catch (e) { error.value = String(e); }
 }
 watch([repo, busy, example], () => sidebarMenu.value?.close());
-const chatVisible = ref(false),
-  context = ref(""),
+const workspaceMode = ref<'git' | 'chat'>('git');
+const chatVisible = computed({
+  get: () => workspaceMode.value === 'chat',
+  set: (visible: boolean) => { workspaceMode.value = visible ? 'chat' : 'git'; },
+});
+const sidebarScroll = ref<HTMLElement>();
+const sidebarPositions = { git: 0, chat: 0 };
+watch(workspaceMode, (mode) => {
+  menu.value = false;
+  sidebarMenu.value?.close();
+  commitOptionsMenu.value?.hidePopover();
+  try { localStorage.setItem('gitgoblin.workspaceMode', mode); } catch { /* Modes work without storage. */ }
+});
+watch(workspaceMode, async (mode, previous) => {
+  if (sidebarScroll.value) sidebarPositions[previous] = sidebarScroll.value.scrollTop;
+  await nextTick();
+  if (sidebarScroll.value) sidebarScroll.value.scrollTop = sidebarPositions[mode];
+});
+const chatNeedsAttention = ref(false);
+const context = ref(""),
   chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; runInstruction: (repo: string, instruction: string) => Promise<void>; stopAll: () => Promise<void>; focusComposer: () => void }>(),
   committing = ref(false),
   requestingPr = ref(false),
@@ -304,7 +316,7 @@ const repoThreads = computed(() =>
 );
 const visibleRepoThreads = computed(() => visibleThreads(repoThreads.value));
 const activeAgents = computed(() =>
-  repoThreads.value.filter((t) => t.activeRunId),
+  repoThreads.value.filter(isThreadRunning),
 );
 const additions = computed(
   () =>
@@ -806,6 +818,7 @@ onMounted(() => {
   });
   if (workspace.value) workspaceObserver.observe(workspace.value);
   try {
+    workspaceMode.value = localStorage.getItem('gitgoblin.workspaceMode') === 'chat' ? 'chat' : 'git';
     const saved = localStorage.getItem('gitgoblin.sidebarWidth');
     if (saved !== null) preferredSidebarWidth.value = clampSidebarWidth(Number(saved), Number.POSITIVE_INFINITY);
   } catch { /* Use the default width when storage is unavailable. */ }
@@ -818,7 +831,7 @@ onUnmounted(() => {
 });
 </script>
 <template>
-  <div class="app-shell" :class="{ 'chat-hidden': !chatVisible, 'has-repository': !!snapshot, 'resizing-sidebar': resizingSidebar }" :style="{ '--sidebar': `${sidebarWidth}px`, '--chat': `${chatWidth}px`, '--files-width': filesWidth === undefined ? undefined : `${filesWidth}px`, '--details-height': detailsHeight === undefined ? undefined : `${detailsHeight}px` }">
+  <div class="app-shell" :class="{ 'resizing-sidebar': resizingSidebar }" :style="{ '--sidebar': `${sidebarWidth}px`, '--files-width': filesWidth === undefined ? undefined : `${filesWidth}px`, '--details-height': detailsHeight === undefined ? undefined : `${detailsHeight}px` }">
     <header class="titlebar" data-tauri-drag-region="deep">
       <div class="brand">
         <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -861,10 +874,7 @@ onUnmounted(() => {
         </div>
         <p v-if="!recent.length && !favorites.length" class="nav-hint">Opened repositories will appear here.</p>
       </div>
-      <button v-if="snapshot" class="new-conversation-action secondary" aria-haspopup="dialog" :disabled="example || busy || committing || requestingPr" @click="openNewConversation" data-tauri-drag-region="false">
-        <MessageSquare :size="15" />New conversation
-      </button>
-          <div v-if="snapshot" class="toolbar-actions" aria-label="Git actions">
+          <div v-if="snapshot && !chatVisible" class="toolbar-actions" aria-label="Git actions">
             <div class="commit-actions" data-tauri-drag-region="false">
               <button class="primary" :disabled="busy || committing || requestingPr || example || !staged.length || !t3Connected"
                 :title="t3Connected ? 'Generate a message and commit staged changes' : 'Connect T3 Code for automatic commits; manual messages are in Commit options'"
@@ -937,24 +947,22 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-      <button
-        class="icon-button"
-        :title="chatVisible ? 'Hide conversations' : 'Show conversations'"
-        @click="chatVisible = !chatVisible"
-      >
-        <PanelRightClose v-if="chatVisible" :size="17" /><PanelRightOpen
-          v-else
-          :size="17"
-        />
-      </button>
       <WindowControls v-if="desktop()" @error="error = $event" />
     </header>
-    <aside id="repository-sidebar" class="sidebar">
+    <aside id="repository-sidebar" class="sidebar" :class="{ 'chat-mode': chatVisible }">
       <div class="sidebar-resize" role="separator" tabindex="0" aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="repository-sidebar"
         :aria-valuenow="sidebarWidth" :aria-valuemin="minSidebarWidth" :aria-valuemax="maxSidebarWidth(sidebarRoom)"
         title="Drag to resize; double-click to reset. Arrow keys also resize."
         @pointerdown="startSidebarResize" @pointermove="moveSidebarResize" @pointerup="stopSidebarResize" @pointercancel="stopSidebarResize" @lostpointercapture="stopSidebarResize" @keydown="sidebarResizeKey" @dblclick="resetSidebarWidth" />
-      <div class="repository-picker">
+      <nav class="workspace-modes" aria-label="Workspace mode">
+        <button :aria-pressed="!chatVisible" @click="workspaceMode = 'git'"><GitBranch :size="16" />Git</button>
+        <button :aria-pressed="chatVisible" @click="workspaceMode = 'chat'">
+          <MessageSquare :size="16" />Chat
+          <span v-if="!chatVisible && chatNeedsAttention" class="mode-attention" role="status" aria-label="Chat needs your attention" title="Chat needs your attention"><AlertTriangle :size="13" /></span>
+          <span v-else-if="!chatVisible && activeAgents.length" class="mode-running" role="status" :aria-label="`${activeAgents.length} agent tasks running`" :title="`${activeAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
+        </button>
+      </nav>
+      <div v-show="!chatVisible" class="repository-picker">
         <FolderGit2 :size="19" />
         <div>
           <strong>{{ snapshot ? repoName : "Your repositories" }}</strong
@@ -963,9 +971,16 @@ onUnmounted(() => {
           }}</span>
         </div>
       </div>
-      <div class="sidebar-scroll">
+      <label v-if="snapshot && chatVisible && snapshot.worktrees.length > 1" class="chat-worktree-picker">
+        Worktree
+        <select :value="snapshot.worktrees.find(tree => normalized(tree.path) === normalized(repo))?.path || repo" :disabled="busy || example" @change="w.openRepo(($event.target as HTMLSelectElement).value)">
+          <option v-if="!snapshot.worktrees.some(tree => normalized(tree.path) === normalized(repo))" :value="repo">{{ snapshot.branch || repoName }}</option>
+          <option v-for="tree in snapshot.worktrees" :key="tree.path" :value="tree.path">{{ tree.branch || 'Detached HEAD' }} · {{ tree.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</option>
+        </select>
+      </label>
+      <div ref="sidebarScroll" class="sidebar-scroll">
         <template v-if="snapshot">
-          <nav class="main-nav">
+          <nav v-show="!chatVisible" class="main-nav">
             <button
               :class="{ active: view === 'changes' }"
               :aria-current="view === 'changes' ? 'page' : undefined"
@@ -988,7 +1003,7 @@ onUnmounted(() => {
               <GitCommitHorizontal :size="16" />Reflog & recovery
             </button>
           </nav>
-          <div class="nav-section">
+          <div v-show="!chatVisible" class="nav-section">
             <button
               class="section-heading"
               @click="sections.branches = !sections.branches"
@@ -1004,7 +1019,7 @@ onUnmounted(() => {
               </button></template
             >
           </div>
-          <div class="nav-section">
+          <div v-show="!chatVisible" class="nav-section">
             <button
               class="section-heading"
               @click="sections.worktrees = !sections.worktrees"
@@ -1029,23 +1044,25 @@ onUnmounted(() => {
                   class="tiny-label"
                   >Current</span
                 ></button
-              ><button class="tree-row subdued" @click="ask('worktree-add')">
+              ><button v-show="!chatVisible" class="tree-row subdued" @click="ask('worktree-add')">
                 <Plus :size="13" />New worktree
               </button></template
             >
           </div>
-          <div class="nav-section">
+          <div v-show="chatVisible" class="nav-section">
+            <div class="conversation-navigation">
             <button
               class="section-heading"
+              :aria-expanded="sections.chats"
               @click="sections.chats = !sections.chats"
             >
               <ChevronDown v-if="sections.chats" :size="12" /><ChevronRight
                 v-else
                 :size="12"
-              />CONVERSATIONS<span>{{
-                example ? 2 : visibleRepoThreads.length
-              }}</span></button
-            ><template v-if="sections.chats"
+              />Conversations</button>
+              <button class="icon-button" aria-label="New chat" title="New chat" aria-haspopup="dialog" :disabled="example || busy || committing || requestingPr" @click="openNewConversation"><Plus :size="16" /></button>
+            </div>
+            <template v-if="sections.chats"
               ><template v-if="example"
                 ><button class="tree-row current" @click="chatVisible = true">
                   <span class="status-dot live" /><span
@@ -1059,6 +1076,7 @@ onUnmounted(() => {
               ><button
                 v-for="thread in visibleRepoThreads"
                 :key="thread.id"
+                :title="thread.title"
                 aria-haspopup="menu" @contextmenu="conversationMenu($event, thread)" @keydown.shift.f10.prevent="conversationMenu($event, thread)"
                 class="tree-row"
                 :class="{ current: selectedThreadId === thread.id }"
@@ -1082,7 +1100,7 @@ onUnmounted(() => {
               </p></template
             >
           </div>
-          <div class="nav-section compact">
+          <div v-show="!chatVisible" class="nav-section compact">
             <button
               class="section-heading"
               @click="sections.remotes = !sections.remotes"
@@ -1092,7 +1110,7 @@ onUnmounted(() => {
                 :size="12"
               /><Globe :size="13" />REMOTES</button
             ><template v-if="sections.remotes"
-              ><BranchTree :key="repo" :nodes="remoteBranchTree" @context="branchMenu" @select="branch => ask('merge', { target: branch.name })" />
+              ><BranchTree :key="repo" :nodes="remoteBranchTree" @context="branchMenu" @select="switchBranch" />
               <button class="tree-row subdued" @click="ask('remote-add')">
                 <Plus :size="13" />Add remote
               </button></template
@@ -1148,7 +1166,7 @@ onUnmounted(() => {
             >
           </div>
         </template>
-        <template v-else
+        <template v-else-if="!chatVisible"
           ><p class="section-heading">RECENT REPOSITORIES</p>
           <button
             v-for="path in recent"
@@ -1166,7 +1184,20 @@ onUnmounted(() => {
           </p></template
         >
       </div>
-      <div class="sidebar-footer">
+      <ChatPanel
+        :visible="chatVisible"
+        v-show="chatVisible"
+        ref="chat"
+        :context="context"
+        :example="example"
+        :repo="repo"
+        @clear-context="context = ''"
+        @select-worktree="openThreadWorktree"
+        @threads="receiveThreads"
+        @selection="selectedThreadId = $event"
+        @attention="chatNeedsAttention = $event"
+      />
+      <div v-show="!chatVisible" class="sidebar-footer">
         <div>
           <span class="status-dot" :class="{ live: t3Connected }" /><span>{{
             t3Connected ? "T3 Code connected" : "Local workspace"
@@ -1175,7 +1206,7 @@ onUnmounted(() => {
         </div>
       </div>
     </aside>
-    <main ref="workspace" class="workspace">
+    <main ref="workspace" class="workspace" aria-label="Git workspace">
       <div v-if="example" class="example-banner">
         <span>EXAMPLE WORKSPACE</span>Preview data · Git actions are
         disabled<button
@@ -1478,20 +1509,6 @@ onUnmounted(() => {
       </footer>
     </main>
     <ContextMenu ref="sidebarMenu" @error="error = $event" />
-    <ChatPanel
-      :visible="chatVisible"
-      v-show="chatVisible"
-      ref="chat"
-      :context="context"
-      :example="example"
-      :repo="repo"
-      @clear-context="context = ''"
-      @select-worktree="openThreadWorktree"
-      @threads="receiveThreads"
-      @selection="selectedThreadId = $event"
-    >
-      <ResizeHandle v-model="preferredChatWidth" label="Resize conversations" controls="conversation-panel" storage-key="gitgoblin.chatWidth" :min="280" :max="maxChatWidth" reverse />
-    </ChatPanel>
     <Teleport to="body">
       <div v-if="renamePath" class="modal-backdrop" @click.self="!w.nameSaving.value && (renamePath = '')" @keydown.esc="!w.nameSaving.value && (renamePath = '')">
         <form class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-repository-title" @submit.prevent="saveRepositoryName">

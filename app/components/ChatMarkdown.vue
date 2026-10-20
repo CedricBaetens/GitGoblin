@@ -13,7 +13,7 @@ const html = computed(() => renderMarkdown(props.text));
 </template>
 
 <style scoped>
-.chat-markdown { font-size: 12px; line-height: 1.75; color: #d4d7df; overflow-wrap: anywhere; }
+.chat-markdown { font-size: 13px; line-height: 1.7; color: #d4d7df; overflow-wrap: anywhere; }
 .chat-markdown :deep(p), .chat-markdown :deep(ul), .chat-markdown :deep(ol), .chat-markdown :deep(blockquote), .chat-markdown :deep(pre) { margin: 0 0 12px; }
 .chat-markdown :deep(p) { font-size: inherit; line-height: inherit; color: inherit; }
 .chat-markdown :deep(div > :last-child) { margin-bottom: 0; }

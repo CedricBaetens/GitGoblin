@@ -38,6 +38,7 @@ const emit = defineEmits<{
   selectWorktree: [path: string, threadId: string];
   threads: [threads: T3Thread[], projects: T3Project[], connected: boolean];
   selection: [threadId: string];
+  attention: [needed: boolean];
 }>();
 const client = new T3Client(() => invoke<string>("t3_ticket"));
 const state = ref("disconnected"),
@@ -166,6 +167,7 @@ function composerKeydown(event: KeyboardEvent) {
 }
 const conversationBody = ref<HTMLElement>();
 let followMessages = true;
+let conversationScroll: number | undefined;
 async function scrollToLatest() {
   await nextTick();
   if (props.visible && followMessages && conversationBody.value)
@@ -173,9 +175,21 @@ async function scrollToLatest() {
 }
 function trackConversationScroll() {
   const el = conversationBody.value;
-  if (el) followMessages = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  if (props.visible && el) {
+    conversationScroll = el.scrollTop;
+    followMessages = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }
 }
-watch(() => props.visible, (visible) => { if (visible) { followMessages = true; void scrollToLatest(); } });
+watch(() => props.visible, async (visible) => {
+  if (!visible) {
+    if (conversationBody.value) conversationScroll = conversationBody.value.scrollTop;
+    return;
+  }
+  await nextTick();
+  if (conversationBody.value && conversationScroll !== undefined)
+    conversationBody.value.scrollTop = conversationScroll;
+  else void scrollToLatest();
+});
 const rememberedThreads = ref<Record<string, string>>({});
 const thread = computed(() =>
   threads.value.find((t) => t.id === selectedId.value),
@@ -193,6 +207,7 @@ const requests = computed(
     [],
 );
 const questions = computed(() => pendingQuestions(projection.value));
+watch([requests, questions], () => emit('attention', !!(requests.value.length || questions.value.length)), { immediate: true });
 watch(questions, () => void scrollToLatest(), { flush: 'post' });
 const connected = computed(() => state.value === "connected");
 watch([skillMenuOpen, () => JSON.stringify(skillScope.value)], () => void loadSkills());
@@ -223,6 +238,7 @@ function select(id: string, followWorktree = true) {
     try { localStorage.setItem('gitgoblin.selectedConversations', JSON.stringify(rememberedThreads.value)); } catch { /* Keep the selection in memory if storage is unavailable. */ }
   }
   followMessages = true;
+  conversationScroll = undefined;
   if (selectedId.value) drafts.set(selectedId.value, prompt.value);
   prompt.value = drafts.get(id) || "";
   selectedId.value = id;
@@ -455,34 +471,15 @@ defineExpose({
 });
 </script>
 <template>
-  <aside id="conversation-panel" class="chat-panel">
-    <slot />
-    <div class="panel-heading">
-      <span class="active-conversation" :title="thread?.title || 'Conversations'"><MessageSquare :size="15" /><span>{{ thread?.title || 'Conversations' }}</span></span>
-    </div>
-    <div class="chat-connection">
-      <span class="status-dot" :class="{ live: connected }" />{{
-        example
-          ? "Example conversation"
-          : connected
-            ? "Connected to T3 Code"
-            : state === "connecting"
-              ? "Connecting…"
-              : "T3 Code disconnected"
-      }}<span v-if="connected" class="subtle">Shared session</span>
-    </div>
+  <section id="conversation-panel" class="chat-panel" aria-label="Chat">
+    <div v-if="!example && state === 'connecting'" class="chat-connection" role="status">Connecting to T3 Code…</div>
     <template v-if="example">
-      <div class="chat-thread-title">
-        <span class="status-dot live" /><strong
-          >Build the agent workspace</strong
-        ><span class="badge">Example</span>
-      </div>
       <div ref="conversationBody" class="conversation-body" @scroll="trackConversationScroll">
         <div class="message user">
           <span class="message-role">YOU <small>10:42</small></span>
           <p>
-            Keep the conversation visible while I review the changes. Switching
-            chats should take me to the right worktree.
+            Keep my place when I switch between Git and Chat. Switching chats
+            should take me to the right worktree.
           </p>
         </div>
         <div class="message">
@@ -497,7 +494,7 @@ defineExpose({
             ><span class="green">+12 −4</span>
           </div>
           <p>
-            You can review the diff on the left and select lines to add to your
+            Review the diff and select lines to add to your
             next instruction.
           </p>
         </div>
@@ -523,7 +520,7 @@ defineExpose({
             <ChatMarkdown :text="message.text" />
           </div>
           <details v-if="turn.work.length || turn.activities.length" class="work-details">
-            <summary>{{ turn.summary }}<ChevronRight :size="13" /></summary>
+            <summary>{{ turn.summary === 'Working…' ? 'Activity' : turn.summary }}<ChevronRight :size="13" /></summary>
             <div class="work-content">
               <div v-for="message in turn.work" :key="message.id" class="message">
                 <ChatMarkdown :text="message.text" :streaming="message.streaming" />
@@ -604,7 +601,7 @@ defineExpose({
           <button type="button" class="icon-button" :aria-label="`Remove ${image.file.name || 'pasted image'}`" :disabled="sending" @click="removeImage(image.id)"><X :size="13" /></button>
         </figure>
       </div>
-      <div v-if="connected && thread && !example" class="agent-status" role="status" aria-live="polite">
+      <div v-if="connected && thread && !example && (busy || sending || requests.length || questions.length || thread.status === 'error')" class="agent-status" role="status" aria-live="polite">
         <LoaderCircle v-if="(busy || sending) && !requests.length" class="spin" :size="13" />
         <ShieldCheck v-else-if="requests.length" :size="13" />
         <CircleAlert v-else-if="thread.status === 'error'" :size="13" />
@@ -648,10 +645,7 @@ defineExpose({
       />
       <div class="composer-footer">
         <span
-          >{{ thread?.modelSelection.model || "T3 Code"
-          }}<span v-if="thread?.activeRunId">
-            · Queues after current task</span
-          ></span
+          :title="thread?.modelSelection.model">{{ thread?.modelSelection.model }}</span
         ><button
           v-if="thread?.activeRunId"
           class="icon-button stop"
@@ -662,6 +656,7 @@ defineExpose({
         ><button
           class="send-button"
           aria-label="Send instruction"
+          :title="thread?.activeRunId ? 'Queue instruction after the current task' : 'Send instruction (Ctrl+Enter)'"
           :disabled="
             !connected || !thread || (!prompt.trim() && !images.length) || sending || example
           "
@@ -761,7 +756,7 @@ defineExpose({
       </div>
       </Teleport
     >
-  </aside>
+  </section>
 </template>
 
 <style scoped>
@@ -783,8 +778,8 @@ defineExpose({
 .pasted-images img { display: block; width: 72px; height: 64px; object-fit: cover; border: 1px solid var(--line); border-radius: 6px; }
 .pasted-images button { position: absolute; top: 2px; right: 2px; padding: 2px; background: #101114dd; }
 .chat-panel { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
-.conversation-body .message p { font-size: 12px; line-height: 1.75; color: #d4d7df; }
-.composer textarea { font-size: 12px; line-height: 1.6; }
+.conversation-body .message p { font-size: 13px; line-height: 1.7; color: #d4d7df; }
+.composer textarea { font-size: 13px; line-height: 1.6; }
 
 .new-conversation-dialog { width: 680px; }
 .new-conversation-dialog textarea { width: 100%; font-size: 12px; }
@@ -806,7 +801,7 @@ defineExpose({
 .work-details[open] summary svg { transform: rotate(90deg); }
 .work-details summary:hover { color: #c1c9dc; }
 .work-content { border-left: 1px solid var(--line); padding-left: 12px; margin: 4px 0 12px; }
-.final-message { border-top: 1px solid var(--line); padding-top: 12px; }
+.final-message { padding-top: 4px; }
 .chat-activity { display: flex; align-items: center; gap: 7px; min-height: 25px; font-size: 11px; color: #8e9bb4; }
 .chat-activity svg { flex-shrink: 0; }
 .chat-activity span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

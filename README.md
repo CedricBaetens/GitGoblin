@@ -39,6 +39,8 @@ GitGoblin is intended to replace Fork, including history, branches, remotes, tag
 
 T3 Code owns conversations and agent execution. GitGoblin connects as a paired client, associates chats with repositories/worktrees, and supports shared instructions, approvals, and live review. Chats in the same worktree share changes; Git does not attribute edits to individual chats. Ordinary code editing remains in an external editor. Git actions that change a worktree need explicit confirmation while a known agent is active.
 
+The left sidebar switches between Git navigation and Chat. The main review area stays visible in both modes. Chat keeps its connection, drafts, and scroll position while hidden; the mode switch indicates running tasks and pending requests in the selected conversation. The last mode is restored on startup.
+
 Dedicated submodule, LFS, signing, WSL, remote-host, and public plugin interfaces are deferred. Existing Git configuration is preserved.
 
 ## Integration boundary
