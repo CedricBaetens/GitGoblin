@@ -426,6 +426,13 @@ export class T3Client {
       holdQueue: true,
     });
   }
+  settle(threadId: string) {
+    return this.dispatch({
+      type: "thread.settle",
+      commandId: crypto.randomUUID(),
+      threadId,
+    });
+  }
   approve(threadId: string, requestId: string, decision: "accept" | "decline") {
     if (this.legacyProtocol) return this.dispatch({
       type: "thread.approval.respond", commandId: crypto.randomUUID(),

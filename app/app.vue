@@ -191,6 +191,7 @@ function worktreeMenu(event: MouseEvent | KeyboardEvent, path: string) {
 function conversationMenu(event: MouseEvent | KeyboardEvent, thread: T3Thread) {
   sidebarMenu.value?.open(event, [
     { label: 'Open conversation', disabled: busy.value, run: () => { chatVisible.value = true; chat.value?.select(thread.id); } },
+    { label: 'Settle conversation', disabled: !t3Connected.value || example.value, run: () => { chatVisible.value = true; return chat.value?.settle(thread.id); } },
     { ...copyItem('Copy conversation title', thread.title), separatorBefore: true }, copyItem('Copy conversation ID', thread.id),
   ]);
 }
@@ -258,7 +259,7 @@ watch(workspaceMode, async (mode, previous) => {
 });
 const chatNeedsAttention = ref(false);
 const context = ref(""),
-  chat = ref<{ select: (id: string) => void; newConversation: (trigger?: HTMLButtonElement) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
+  chat = ref<{ select: (id: string) => void; settle: (id: string) => Promise<void>; newConversation: (trigger?: HTMLButtonElement) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
   menu = ref(false);
 const commitMessages = ref<Record<string, string>>({});
 const commitMessage = computed({
@@ -373,14 +374,9 @@ async function confirmDiscard(paths: string[]) {
     dialogDescription.value = `Permanently discard unstaged changes in ${files.length} file${files.length === 1 ? '' : 's'}? Staged changes are kept. New untracked files are deleted. This cannot be undone.`;
   } catch (e) { error.value = String(e); }
 }
-const conflict = ref<{
-    base: string;
-    ours: string;
-    theirs: string;
-    result: string;
-    fingerprint: string;
-  }>(),
-  conflictTab = ref("ours");
+const conflictOpen = ref(false);
+const conflictInitial = ref('');
+const conflictGitOutput = ref('');
 const definitions: Record<
   string,
   {
@@ -581,7 +577,13 @@ async function executeDialog() {
     if (action === 'commit') commitMessages.value[root] = '';
     dialog.value = "";
   } catch (e) {
-    dialogError.value = String(e);
+    if (snapshot.value?.files.some(file => file.conflict)) {
+      dialog.value = '';
+      error.value = '';
+      conflictInitial.value = '';
+      conflictGitOutput.value = String(e);
+      conflictOpen.value = true;
+    } else dialogError.value = String(e);
   }
 }
 async function stopAgents() {
@@ -721,24 +723,9 @@ async function showFileInfo(action: "blame" | "history") {
   }
 }
 async function openConflict() {
-  try {
-    conflict.value = await w.read("conflict", { path: selected.value });
-  } catch (e) {
-    error.value = String(e);
-  }
-}
-async function resolveConflict() {
-  if (!conflict.value) return;
-  try {
-    await w.mutate("resolve", {
-      path: selected.value,
-      text: conflict.value.result,
-      fingerprint: conflict.value.fingerprint,
-    });
-    conflict.value = undefined;
-  } catch (e) {
-    error.value = String(e);
-  }
+  conflictInitial.value = selected.value;
+  conflictGitOutput.value = "";
+  conflictOpen.value = true;
 }
 async function openEditor() {
   await fileLocation('open_editor', selected.value);
@@ -1186,9 +1173,9 @@ onUnmounted(() => {
             Abort</button
           ><button
             class="primary small"
-            @click="ask('continue', { mode: snapshot.operation })"
+            @click="conflictOpen = true"
           >
-            Continue
+            {{ snapshot.files.some(file => file.conflict) ? 'Resolve conflicts' : 'Continue' }}
           </button>
         </div>
         <div v-if="error" class="error-banner" role="alert">
@@ -1618,71 +1605,7 @@ onUnmounted(() => {
           <pre class="output-content">{{ output }}</pre>
         </section>
       </div>
-      <div v-if="conflict" class="modal-backdrop">
-        <section
-          class="modal conflict-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="conflict-title"
-        >
-          <div class="modal-heading">
-            <h2 id="conflict-title">Resolve conflict · {{ selected }}</h2>
-            <button
-              class="icon-button"
-              aria-label="Close conflict editor"
-              @click="conflict = undefined"
-            >
-              <X :size="18" />
-            </button>
-          </div>
-          <div class="conflict-grid">
-            <div>
-              <div class="segmented">
-                <button
-                  v-for="tab in ['base', 'ours', 'theirs']"
-                  :key="tab"
-                  :class="{ active: conflictTab === tab }"
-                  @click="conflictTab = tab"
-                >
-                  {{ tab }}
-                </button>
-              </div>
-              <pre>{{
-                conflict[conflictTab as "base" | "ours" | "theirs"]
-              }}</pre>
-              <div class="button-row">
-                <button class="small" @click="conflict.result = conflict.ours">
-                  Use ours</button
-                ><button
-                  class="small"
-                  @click="conflict.result = conflict.theirs"
-                >
-                  Use theirs
-                </button>
-              </div>
-            </div>
-            <label
-              >Resolved result<textarea
-                v-model="conflict.result"
-                spellcheck="false"
-              />
-            </label>
-          </div>
-          <div class="modal-footer">
-            <span>Edit the result, then mark it resolved and stage it.</span
-            ><button @click="conflict = undefined">Cancel</button
-            ><button
-              class="primary"
-              :disabled="
-                busy || /^(<<<<<<<|=======|>>>>>>>)/m.test(conflict.result)
-              "
-              @click="resolveConflict"
-            >
-              Mark resolved & stage
-            </button>
-          </div>
-        </section>
-      </div>
+      <ConflictResolver v-if="conflictOpen && snapshot" :key="repo" :snapshot="snapshot" :initial-path="conflictInitial" :git-output="conflictGitOutput" :read="w.read" :mutate="w.mutate" @close="conflictOpen = false" />
     </Teleport>
   </div>
 </template>

@@ -29,6 +29,8 @@ it('restores each repository conversation without choosing a different repo or w
   expect(repositoryThreadSelection(a, 'b-selected')).toBe('a-first');
   expect(repositoryThreadSelection(repositoryThreads(items, [], 'D:/Empty'), 'a-selected')).toBe('');
   expect(repositoryThreadSelection([{ ...a[1]!, archivedAt: 'today' }, a[0]!], 'a-selected')).toBe('a-first');
+  expect(repositoryThreadSelection([{ ...a[1]!, settledOverride: 'settled' }, a[0]!], 'a-selected')).toBe('a-first');
+  expect(repositoryThreadSelection([{ ...a[1]!, settledOverride: 'settled' }], 'a-selected')).toBe('');
 });
 
 it('resolves project-root conversations and counts only running agents', () => {

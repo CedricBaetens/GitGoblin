@@ -62,15 +62,43 @@ onUnmounted(() => {
 });
 function jump(offset: number) {
   props.scroller?.scrollTo({ top: Math.max(0, offset - props.scroller.clientHeight / 3), behavior: 'instant' });
+  updateViewport();
 }
-function jumpTrack(event: MouseEvent) {
+let pointer: number | undefined, grabOffset = 0;
+function startDrag(event: PointerEvent) {
+  const el = props.scroller;
+  if (!el || event.button !== 0 || pointer !== undefined || event.target !== event.currentTarget) return;
+  const track = event.currentTarget as HTMLElement;
+  const bounds = track.getBoundingClientRect();
+  if (!bounds.height || !el.scrollHeight) return;
+  event.preventDefault();
+  const y = event.clientY - bounds.top;
+  const top = el.scrollTop / el.scrollHeight * bounds.height;
+  const height = el.clientHeight / el.scrollHeight * bounds.height;
+  grabOffset = y >= top && y <= top + height ? y - top : height / 2;
+  pointer = event.pointerId;
+  track.setPointerCapture(pointer);
+  drag(event);
+}
+function drag(event: PointerEvent) {
+  const el = props.scroller;
+  if (event.pointerId !== pointer || !el) return;
   const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  jump((event.clientY - bounds.top) / bounds.height * (props.scroller?.scrollHeight || 0));
+  if (!bounds.height) return;
+  el.scrollTo({ top: Math.max(0, (event.clientY - bounds.top - grabOffset) / bounds.height * el.scrollHeight), behavior: 'instant' });
+  updateViewport();
+}
+function stopDrag(event: PointerEvent) {
+  if (event.pointerId !== pointer) return;
+  pointer = undefined;
+  const track = event.currentTarget as HTMLElement;
+  if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId);
 }
 </script>
 
 <template>
-  <nav class="diff-overview" aria-label="Change overview" @click.self="jumpTrack">
+  <nav class="diff-overview" aria-label="Change overview"
+    @pointerdown="startDrag" @pointermove="drag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag">
     <div class="overview-viewport" :style="{ top: `${viewport.top}%`, height: `${Math.min(100, viewport.height)}%` }" />
     <button v-for="(marker, i) in markers" :key="i" class="overview-marker" :class="marker.kind"
       :style="{ top: `${marker.top}%`, height: `${marker.height}%` }"
@@ -81,7 +109,7 @@ function jumpTrack(event: MouseEvent) {
 </template>
 
 <style scoped>
-.diff-overview { position: relative; flex: 0 0 22px; background: #11151d; border-left: 1px solid var(--line); cursor: pointer; overflow: hidden; }
+.diff-overview { position: relative; flex: 0 0 22px; background: #11151d; border-left: 1px solid var(--line); cursor: pointer; overflow: hidden; touch-action: none; user-select: none; }
 .overview-viewport { position: absolute; left: 0; width: 100%; background: #94a7cc18; border-block: 1px solid #94a7cc45; pointer-events: none; }
 .overview-marker { position: absolute; width: 8px; min-height: 4px; padding: 0; border: 0; border-radius: 1px; }
 .overview-marker.add { right: 2px; background: #72c795; }

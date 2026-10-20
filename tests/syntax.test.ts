@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { diffLanguage, highlightDiff } from '../app/lib/syntax';
+import { diffLanguage, highlightDiff, highlightCode } from '../app/lib/syntax';
 import { parseDiff } from '../app/lib/diff';
 
 it('detects each file language, including deleted files and paths with spaces', () => {
@@ -31,4 +31,12 @@ it('highlights history files separately and falls back for unknown or huge conte
   expect(tokens.some((token) => token.text === '"ok"' && token.classes.includes('hljs-attr'))).toBe(true);
   expect(highlightDiff(file('a.unknown', 'some text'))).toEqual({});
   expect(highlightDiff('x'.repeat(300_001), 'file.ts')).toEqual({});
+});
+
+it('uses the diff language and token classes for conflict editor code', () => {
+  const text = 'const enabled = true;\n// comment\n';
+  const lines = highlightCode(text, 'settings.ts');
+  expect(lines.map(line => line.map(token => token.text).join('')).join('\n')).toBe(text);
+  expect(lines[0]!.some(token => token.classes.includes('hljs-keyword'))).toBe(true);
+  expect(highlightCode('unknown\n', 'file.unknown')).toEqual([[{ text: 'unknown', classes: '' }], [{ text: '', classes: '' }]]);
 });

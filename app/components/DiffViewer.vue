@@ -358,14 +358,6 @@ function context() {
 .diff-body { display: flex; min-height: 0; flex: 1; }
 .diff-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .diff-body .diff-scroll { min-width: 0; }
-.hljs-comment, .hljs-quote { color: #8c98aa; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal { color: #c5a5ef; }
-.hljs-string, .hljs-regexp, .hljs-addition { color: #add5a2; }
-.hljs-number, .hljs-symbol, .hljs-bullet { color: #e4b58b; }
-.hljs-title, .hljs-section { color: #e7ce8d; }
-.hljs-type, .hljs-built_in, .hljs-name { color: #81cbd1; }
-.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-selector-class { color: #9bc8ef; }
-.hljs-meta, .hljs-doctag { color: #a8b6ec; }
 .diff-line.delete .diff-inline-change { color: #fff0f2; background: #b83e53; border-radius: 2px; box-shadow: inset 0 -1px #ff8c9d; }
 .diff-line.add .diff-inline-change { color: #ecfff1; background: #237443; border-radius: 2px; box-shadow: inset 0 -1px #79dfa0; }
 .diff-loading { visibility: hidden; flex-shrink: 0; }

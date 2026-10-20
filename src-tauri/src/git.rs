@@ -689,20 +689,25 @@ pub fn execute(req: Request) -> Result<Value, String> {
         }
         "conflict" => {
             relative(&req.path)?;
-            let read_stage = |stage: u8| {
-                git(&repo, &["show", &format!(":{stage}:{}", req.path)]).unwrap_or_default()
+            let read_stage = |stage: u8| -> Result<Option<Vec<u8>>, String> {
+                let out = command(&repo).args(["show", &format!(":{stage}:{}", req.path)]).output().map_err(|e| e.to_string())?;
+                Ok(if out.status.success() { Some(out.stdout) } else { None })
             };
-            let content = match file_content(&repo, &req.path)? {
-                Some(bytes) => String::from_utf8(bytes).map_err(|_| {
-                    "Binary conflicts require choosing a version in an external editor."
-                })?,
-                None => String::new(),
-            };
-            json!({"base":read_stage(1),"ours":read_stage(2),"theirs":read_stage(3),"result":content,"fingerprint":fingerprint(&repo,&req.path)?})
+            let base = read_stage(1)?;
+            let ours = read_stage(2)?;
+            let theirs = read_stage(3)?;
+            if ours.is_none() && theirs.is_none() { return Err("This file is no longer conflicted.".into()); }
+            let content = file_content(&repo, &req.path)?.unwrap_or_default();
+            let binary = [&base, &ours, &theirs].iter().filter_map(|s| s.as_ref()).any(|bytes| bytes.contains(&0) || std::str::from_utf8(bytes).is_err()) || content.contains(&0) || std::str::from_utf8(&content).is_err();
+            let text = |bytes: &Option<Vec<u8>>| bytes.as_ref().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+            json!({"base":text(&base),"ours":text(&ours),"theirs":text(&theirs),"oursExists":ours.is_some(),"theirsExists":theirs.is_some(),"binary":binary,"result":String::from_utf8_lossy(&content),"fingerprint":fingerprint(&repo,&req.path)?})
         }
         "resolve" => {
             check_fingerprint(&repo, &req)?;
             relative(&req.path)?;
+            if git(&repo, &["ls-files", "-u", "--", &req.path])?.is_empty() {
+                return Err("This file is no longer conflicted. Refresh before resolving.".into());
+            }
             let candidate = repo.join(&req.path);
             let parent = fs::canonicalize(candidate.parent().ok_or("Invalid conflict path")?)
                 .map_err(|e| e.to_string())?;
@@ -714,7 +719,21 @@ pub fn execute(req: Request) -> Result<Value, String> {
             } else {
                 candidate
             };
-            fs::write(path, req.text.as_bytes()).map_err(|e| e.to_string())?;
+            match req.mode.as_str() {
+                "delete" => { if path.exists() { fs::remove_file(&path).map_err(|e| e.to_string())?; } }
+                "ours" | "theirs" => {
+                    let stage = if req.mode == "ours" { 2 } else { 3 };
+                    let out = command(&repo).args(["show", &format!(":{stage}:{}", req.path)]).output().map_err(|e| e.to_string())?;
+                    if !out.status.success() { return Err("That version does not exist; choose Delete file.".into()); }
+                    fs::write(&path, out.stdout).map_err(|e| e.to_string())?;
+                }
+                "external" => {}
+                "" => {
+                    if req.text.lines().any(|line| line.starts_with("<<<<<<<") || line.starts_with("=======") || line.starts_with(">>>>>>>") || line.starts_with("|||||||")) { return Err("Resolve remaining conflict markers first.".into()); }
+                    fs::write(&path, req.text.as_bytes()).map_err(|e| e.to_string())?;
+                }
+                _ => return Err("Unknown conflict resolution.".into()),
+            }
             git(&repo, &["add", "--", &req.path])?;
             json!("Conflict resolved and staged")
         }
@@ -1322,11 +1341,61 @@ mod tests {
         req.target = "base".into();
         assert!(execute(req).is_err());
         assert_eq!(execute(request(repo, "snapshot")).unwrap()["operation"], "rebase");
+        let mut req = request(repo, "conflict");
+        req.path = "file.txt".into();
+        let conflict = execute(req).unwrap();
+        assert_eq!(conflict["base"], "initial\n");
+        assert_eq!(conflict["ours"], "base\n");
+        assert_eq!(conflict["theirs"], "feature\n");
+        let mut req = request(repo, "resolve");
+        req.path = "file.txt".into();
+        req.fingerprint = conflict["fingerprint"].as_str().unwrap().into();
+        req.text = conflict["result"].as_str().unwrap().into();
+        assert!(execute(req).unwrap_err().contains("markers"));
+        let mut req = request(repo, "resolve");
+        req.path = "file.txt".into();
+        req.fingerprint = conflict["fingerprint"].as_str().unwrap().into();
+        req.text = "combined\n".into();
+        execute(req).unwrap();
+        assert!(git(repo, &["ls-files", "-u"]).unwrap().is_empty());
         let mut req = request(repo, "abort");
         req.mode = "rebase".into();
         execute(req).unwrap();
         assert_eq!(git(repo, &["rev-parse", "HEAD"]).unwrap(), original);
         assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "feature\n");
+    }
+
+    #[test]
+    fn conflict_resolution_preserves_binary_bytes_and_handles_deletion() {
+        for deletion in [false, true] {
+            let dir = fixture();
+            let repo = dir.path();
+            fs::write(repo.join("file.bin"), b"base\0bytes").unwrap();
+            git(repo, &["add", "."]).unwrap();
+            git(repo, &["commit", "-m", "base"]).unwrap();
+            git(repo, &["branch", "other"]).unwrap();
+            fs::write(repo.join("file.bin"), b"ours\0bytes").unwrap();
+            git(repo, &["commit", "-am", "ours"]).unwrap();
+            git(repo, &["switch", "other"]).unwrap();
+            if deletion { git(repo, &["rm", "file.bin"]).unwrap(); }
+            else { fs::write(repo.join("file.bin"), b"theirs\0bytes").unwrap(); }
+            git(repo, &["commit", "-am", "other"]).unwrap();
+            assert!(git(repo, &["merge", "-", "--no-edit"]).is_err());
+            let mut req = request(repo, "conflict");
+            req.path = "file.bin".into();
+            let conflict = execute(req).unwrap();
+            assert_eq!(conflict["binary"], true);
+            assert_eq!(conflict["oursExists"], !deletion);
+            assert_eq!(conflict["theirsExists"], true);
+            let mut req = request(repo, "resolve");
+            req.path = "file.bin".into();
+            req.fingerprint = conflict["fingerprint"].as_str().unwrap().into();
+            req.mode = if deletion { "delete" } else { "theirs" }.into();
+            execute(req).unwrap();
+            if deletion { assert!(!repo.join("file.bin").exists()); }
+            else { assert_eq!(fs::read(repo.join("file.bin")).unwrap(), b"ours\0bytes"); }
+            assert!(git(repo, &["ls-files", "-u"]).unwrap().is_empty());
+        }
     }
 
     #[test]

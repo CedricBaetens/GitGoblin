@@ -37,6 +37,35 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it.each([false, true])('settles conversations through T3 and waits for authoritative updates (legacy=%s)', async legacy => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const requestId = socket.sent[0].id;
+    const thread = { id: 'one', title: 'Finished work' };
+    const receive = (item: unknown) => socket.receive({ _tag: 'Chunk', requestId, values: [item] });
+    receive({ kind: 'snapshot', snapshot: {
+      ...(legacy ? { snapshotSequence: 1 } : { schemaVersion: 2 }), projects: [], threads: [thread],
+    } });
+    const rejected = client.settle('one');
+    const failedCommand = socket.sent.at(-1);
+    socket.receive({ _tag: 'Exit', requestId: failedCommand.id, exit: { _tag: 'Failure', cause: { message: 'Cannot settle' } } });
+    await expect(rejected).rejects.toThrow('Cannot settle');
+    expect(visibleThreads(client.threads).map(thread => thread.id)).toEqual(['one']);
+
+    const settling = client.settle('one');
+    const command = socket.sent.at(-1);
+    expect(command).toMatchObject({ tag: 'orchestration.dispatchCommand', payload: {
+      type: 'thread.settle', commandId: expect.any(String), threadId: 'one',
+    } });
+    expect(command.payload.commandId).not.toBe(failedCommand.payload.commandId);
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: {} } });
+    await settling;
+    expect(visibleThreads(client.threads)).toHaveLength(1);
+    receive({ kind: legacy ? 'thread-upserted' : 'thread.updated', thread: { ...thread, settledOverride: 'settled' } });
+    expect(visibleThreads(client.threads)).toEqual([]);
+  });
   it('loads skills for the exact provider and worktree', async () => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);

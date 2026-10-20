@@ -57,6 +57,7 @@ const newProject = ref(""),
   newWorktree = ref(""),
   newModel = ref("");
 const creating = ref(false);
+const settlingId = ref("");
 const newConversationDialog = ref<HTMLElement>();
 const newConversationButton = ref<HTMLButtonElement>();
 const newPreset = ref<(typeof conversationPresets)[number]>(conversationPresets[0]);
@@ -259,7 +260,7 @@ async function pair() {
   }
 }
 async function send() {
-  if (!thread.value || (!prompt.value.trim() && !images.value.length) || sending.value) return;
+  if (!thread.value || (!prompt.value.trim() && !images.value.length) || sending.value || settlingId.value) return;
   sending.value = true;
   error.value = "";
   const submittedThread = thread.value;
@@ -299,6 +300,18 @@ async function stop() {
     await client.stop(thread.value);
   } catch (e) {
     error.value = String(e);
+  }
+}
+async function settle(id: string) {
+  if (!connected.value || props.example || sending.value || settlingId.value) return;
+  settlingId.value = id;
+  error.value = "";
+  try {
+    await client.settle(id);
+  } catch (e) {
+    error.value = String(e);
+  } finally {
+    settlingId.value = "";
   }
 }
 async function respond(id: string, decision: "accept" | "decline") {
@@ -437,6 +450,7 @@ onUnmounted(() => {
 });
 defineExpose({
   select,
+  settle,
   newConversation: newChat,
   focusComposer: () => composer.value?.focus(),
   stopAll: async () => {
@@ -622,6 +636,15 @@ defineExpose({
         <span
           :title="thread?.modelSelection.model">{{ thread?.modelSelection.model }}</span
         ><button
+          v-if="connected && thread && !example"
+          type="button"
+          :disabled="sending || !!settlingId"
+          title="Mark this conversation as settled and remove it from the active list"
+          @click="settle(thread.id)"
+        >
+          <LoaderCircle v-if="settlingId === thread.id" :size="13" class="spin" />
+          <Check v-else :size="13" /> Settle conversation
+        </button><button
           v-if="thread?.activeRunId"
           class="icon-button stop"
           title="Stop current task"
@@ -633,7 +656,7 @@ defineExpose({
           aria-label="Send instruction"
           :title="thread?.activeRunId ? 'Queue instruction after the current task' : 'Send instruction (Ctrl+Enter)'"
           :disabled="
-            !connected || !thread || (!prompt.trim() && !images.length) || sending || example
+            !connected || !thread || (!prompt.trim() && !images.length) || sending || !!settlingId || example
           "
           @click="send"
         >

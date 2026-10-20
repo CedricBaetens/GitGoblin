@@ -42,6 +42,12 @@ function codeLines(code: string, language: string): SyntaxToken[][] {
   return lines;
 }
 
+export function highlightCode(text: string, path: string): SyntaxToken[][] {
+  const language = diffLanguage('', path);
+  if (!language || text.length > 300_000) return text.split('\n').map(text => [{ text, classes: '' }]);
+  return codeLines(text, language);
+}
+
 function markChanges(tokens: SyntaxToken[], ranges: ChangeRange[]): SyntaxToken[] {
   const result: SyntaxToken[] = [];
   let offset = 0, rangeIndex = 0;
