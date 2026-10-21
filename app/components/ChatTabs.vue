@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ChevronDown, MessageSquare, Plus, Search, X } from 'lucide-vue-next';
 import type { T3Project, T3Thread } from '~/lib/types';
 import { chatHistory } from '~/lib/chat-tabs';
@@ -17,11 +17,22 @@ const emit = defineEmits<{
 const strip = ref<HTMLElement>(), picker = ref<HTMLDialogElement>(), searchInput = ref<HTMLInputElement>();
 const search = ref(''), archived = ref(false), openOnly = ref(false);
 const dragged = ref('');
+const overflowing = ref(false);
+let tabResize: ResizeObserver;
+function measureTabs() {
+  overflowing.value = !!strip.value && strip.value.scrollWidth > strip.value.clientWidth + 1;
+}
+onMounted(() => {
+  tabResize = new ResizeObserver(measureTabs);
+  if (strip.value) tabResize.observe(strip.value);
+});
+onUnmounted(() => tabResize?.disconnect());
 const tabMenu = ref<ContextMenuHandle>(), pickerMenu = ref<ContextMenuHandle>();
 function chatMenu(event: MouseEvent | KeyboardEvent, thread: T3Thread) {
   (picker.value?.open ? pickerMenu.value : tabMenu.value)?.open(event, props.actions(thread));
 }
 const tabs = computed(() => props.ids.map(id => props.threads.find(thread => thread.id === id)).filter((thread): thread is T3Thread => !!thread && !thread.deletedAt));
+watch(tabs, () => void nextTick(measureTabs), { deep: true });
 function root(thread: T3Thread) { return props.projects.find(project => project.id === thread.projectId)?.workspaceRoot || thread.worktreePath || ''; }
 function name(thread: T3Thread) { return props.repositoryName(root(thread)) || props.projects.find(project => project.id === thread.projectId)?.title || 'Unknown repository'; }
 function worktree(thread: T3Thread) {
@@ -73,7 +84,7 @@ function drop(target: string) { if (dragged.value) emit('move', dragged.value, t
 defineExpose({ openAll, closePicker: () => picker.value?.close() });
 </script>
 <template>
-  <nav class="chat-tabs" aria-label="Chat tabs">
+  <nav class="chat-tabs" aria-label="Chat tabs" data-tauri-drag-region="false">
     <div ref="strip" class="chat-tab-strip" role="tablist" aria-label="Open chats" @wheel="event => { if (strip && Math.abs(event.deltaY) > Math.abs(event.deltaX)) { strip.scrollLeft += event.deltaY; event.preventDefault(); } }">
       <div v-for="thread in tabs" :key="thread.id" class="chat-tab" :class="{ selected: selected === thread.id }" draggable="true"
         @contextmenu="chatMenu($event, thread)" @keydown.shift.f10.stop.prevent="chatMenu($event, thread)" @keydown.context-menu.stop.prevent="chatMenu($event, thread)"
@@ -87,8 +98,8 @@ defineExpose({ openAll, closePicker: () => picker.value?.close() });
       </div>
       <span v-if="!tabs.length" class="empty-tabs">Open a chat to get started</span>
     </div>
-    <button class="icon-button" aria-label="Open chat tabs" title="Open chat tabs" @click="openAll(true)"><ChevronDown :size="16" /></button>
-    <button class="icon-button" aria-label="New chat" title="New chat" :disabled="disabled" @click="emit('new', $event)"><Plus :size="17" /></button>
+    <button v-if="overflowing" class="icon-button" aria-label="Open chat tabs" title="Open chat tabs" @click="openAll(true)"><ChevronDown :size="16" /></button>
+    <button class="primary new-chat-button" aria-label="New chat" :disabled="disabled" @click="emit('new', $event)"><Plus :size="15" />New chat</button>
     <button class="all-chats-button" aria-haspopup="dialog" @click="openAll()"><MessageSquare :size="14" />All chats</button>
     <Teleport to="body">
       <dialog ref="picker" class="chat-picker" aria-labelledby="chat-picker-title" @click="event => { if (event.target === picker) picker?.close(); }">
@@ -113,18 +124,20 @@ defineExpose({ openAll, closePicker: () => picker.value?.close() });
   </nav>
 </template>
 <style scoped>
-.chat-tabs { display: flex; align-items: center; gap: 6px; min-width: 0; height: var(--pane-heading-height); min-height: var(--pane-heading-height); flex-shrink: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); background: #151923; }
-.chat-tab-strip { display: flex; gap: 5px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
-.chat-tab { display: flex; flex: 0 0 auto; max-width: 360px; border: 1px solid var(--line); border-radius: 7px; background: #1b202b; }
+.chat-tabs { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 100%; padding: 4px 12px; }
+.chat-tab-strip { display: flex; gap: 5px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.chat-tab-strip::-webkit-scrollbar { display: none; }
+.chat-tab { display: flex; flex: 0 0 auto; height: 44px; max-width: 360px; border: 1px solid var(--line); border-radius: 6px; background: #1b202b; }
 .chat-tab.selected { background: #2a3348; border-color: #657ba8; }
-.chat-tab > button[role="tab"] { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 5px 7px 11px; border: 0; background: transparent; text-align: left; }
+.chat-tab > button[role="tab"] { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 5px 5px 5px 11px; border: 0; background: transparent; text-align: left; }
 .tab-label { display: grid; gap: 3px; min-width: 0; }
 .tab-label small, .tab-label strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.tab-label small { font-size: 10px; color: #a5b5d5; }
-.tab-label strong { font-size: 12px; font-weight: 500; color: #e2e7f3; }
+.tab-label small { font-size: 10px; line-height: 12px; color: #a5b5d5; }
+.tab-label strong { font-size: 12px; line-height: 15px; font-weight: 500; color: #e2e7f3; }
 .tab-close { align-self: center; margin: 0 4px; padding: 4px; flex-shrink: 0; }
-.empty-tabs { padding: 13px 5px; color: #98a5bc; font-size: 12px; }
+.empty-tabs { padding: 0 5px; color: #98a5bc; font-size: 12px; }
 .all-chats-button { flex-shrink: 0; font-size: 11px; gap: 5px; }
+.new-chat-button { flex-shrink: 0; height: 32px; font-size: 11px; }
 .chat-picker { width: min(660px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 64px)); padding: 20px; border: 1px solid #3a455c; border-radius: 12px; color: #e2e7f3; background: #171c26; box-shadow: 0 24px 80px #0008; }
 .chat-picker::backdrop { background: #090c14aa; }
 .chat-picker[open] { display: flex; flex-direction: column; gap: 14px; }

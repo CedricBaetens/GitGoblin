@@ -879,6 +879,14 @@ onUnmounted(() => {
             stroke-width="2"
           /></svg
         ><span>gitgoblin</span>
+        <nav class="workspace-modes" aria-label="Workspace mode" data-tauri-drag-region="false">
+          <button :aria-pressed="!chatVisible" @click="workspaceMode = 'git'"><GitBranch :size="16" />Git</button>
+          <button :aria-pressed="chatVisible" @click="workspaceMode = 'chat'">
+            <MessageSquare :size="16" />Chat
+            <span v-if="!chatVisible && (chatNeedsAttention || Object.values(chatIndicators).some(state => state.attention || state.unread))" class="mode-attention" role="status" aria-label="Chat needs your attention" title="Chat needs your attention"><AlertTriangle :size="13" /></span>
+            <span v-else-if="!chatVisible && allActiveAgents.length" class="mode-running" role="status" :aria-label="`${allActiveAgents.length} agent tasks running`" :title="`${allActiveAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
+          </button>
+        </nav>
         <nav class="application-menu" aria-label="Application menu" data-tauri-drag-region="false">
           <button aria-haspopup="true" @click="toggleTopMenu(fileMenu, $event)">File<ChevronDown :size="11" /></button>
         </nav>
@@ -892,7 +900,7 @@ onUnmounted(() => {
           <Star :size="12" fill="currentColor" /><span>{{ w.repositoryName(path) }}</span>
         </button>
       </nav>
-      <div class="titlebar-context">
+      <div v-show="!chatVisible" class="titlebar-context">
         <template v-if="!chatVisible">
         <button class="repository-switch" popovertarget="repository-menu" aria-label="Switch repository" :disabled="busy" :title="repo || 'Switch repository'">
           <FolderGit2 :size="15" /><strong>{{ snapshot ? repoName : 'Repositories' }}</strong><ChevronDown :size="12" />
@@ -900,6 +908,10 @@ onUnmounted(() => {
         <template v-if="snapshot"><span class="context-divider">/</span><GitBranch :size="13" /><span :title="snapshot.branch">{{ snapshot.branch }}</span></template>
         </template>
       </div>
+      <ChatTabs v-show="chatVisible" ref="chatNavigation" :ids="chatTabs.ids" :selected="selectedThreadId" :threads="threads" :projects="projects"
+        :activity="chatIndicators" :repository-name="w.repositoryName" :actions="chatActions" :disabled="busy || example"
+        @error="error = $event"
+        @select="selectChat" @close="closeChat" @move="(id, target) => chatTabs = moveChatTab(chatTabs, id, target)" @new="openNewConversation" />
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
         <div class="repository-menu-heading">Recent repositories</div>
         <div v-for="path in [...new Set([...favorites, ...recent])]" :key="path" class="repository-menu-row" @contextmenu="repositoryContext($event, path)">
@@ -973,24 +985,56 @@ onUnmounted(() => {
           </div>
       <WindowControls v-if="desktop()" @error="error = $event" />
     </header>
+    <div class="workspace-banners">
+      <div v-if="example" class="example-banner">
+        <span>EXAMPLE WORKSPACE</span>Preview data · Git actions are
+        disabled<button
+          @click="
+            repo = '';
+            snapshot = undefined;
+            example = false;
+          "
+        >
+          Exit preview<X :size="12" />
+        </button>
+      </div>
+      <div v-if="snapshot?.operation" class="operation-banner">
+        <GitMerge :size="16" /><strong
+          >{{ snapshot.operation }} in progress</strong
+        ><span>Resolve conflicts or amend, then continue.</span
+        ><button
+          class="small"
+          @click="ask('abort', { mode: snapshot.operation })"
+        >
+          Abort</button
+        ><button
+          class="primary small"
+          @click="conflictOpen = true"
+        >
+          {{ snapshot.files.some(file => file.conflict) ? 'Resolve conflicts' : 'Continue' }}
+        </button>
+      </div>
+      <div v-if="error" class="error-banner" role="alert">
+        <AlertTriangle :size="15" /><span>{{ error }}</span
+        ><button
+          class="icon-button"
+          aria-label="Dismiss error"
+          @click="error = ''"
+        >
+          <X :size="14" />
+        </button>
+      </div>
+    </div>
     <aside id="repository-sidebar" class="sidebar" :class="{ 'chat-mode': chatVisible }">
       <div class="sidebar-resize" role="separator" tabindex="0" aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="repository-sidebar"
         :aria-valuenow="sidebarWidth" :aria-valuemin="minSidebarWidth" :aria-valuemax="maxSidebarWidth(sidebarRoom)"
         title="Drag to resize; double-click to reset. Arrow keys also resize."
         @pointerdown="startSidebarResize" @pointermove="moveSidebarResize" @pointerup="stopSidebarResize" @pointercancel="stopSidebarResize" @lostpointercapture="stopSidebarResize" @keydown="sidebarResizeKey" @dblclick="resetSidebarWidth" />
-      <div class="sidebar-heading">
-      <nav class="workspace-modes" aria-label="Workspace mode">
-        <button :aria-pressed="!chatVisible" @click="workspaceMode = 'git'"><GitBranch :size="16" />Git</button>
-        <button :aria-pressed="chatVisible" @click="workspaceMode = 'chat'">
-          <MessageSquare :size="16" />Chat
-          <span v-if="!chatVisible && (chatNeedsAttention || Object.values(chatIndicators).some(state => state.attention || state.unread))" class="mode-attention" role="status" aria-label="Chat needs your attention" title="Chat needs your attention"><AlertTriangle :size="13" /></span>
-          <span v-else-if="!chatVisible && allActiveAgents.length" class="mode-running" role="status" :aria-label="`${allActiveAgents.length} agent tasks running`" :title="`${allActiveAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
-        </button>
-      </nav>
-      <div v-if="chatVisible && selectedChatWorktree" class="chat-worktree-label" :title="selectedChatWorktree">
-        <FolderGit2 :size="12" />
-        <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
-      </div>
+      <div v-if="chatVisible && selectedChatWorktree" class="sidebar-heading">
+        <div class="chat-worktree-label" :title="selectedChatWorktree">
+          <FolderGit2 :size="12" />
+          <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
+        </div>
       </div>
       <div v-show="!chatVisible" class="repository-picker">
         <FolderGit2 :size="19" />
@@ -1182,49 +1226,7 @@ onUnmounted(() => {
       </div>
     </aside>
     <main ref="workspace" class="workspace" aria-label="Git workspace">
-      <div v-if="example" class="example-banner">
-        <span>EXAMPLE WORKSPACE</span>Preview data · Git actions are
-        disabled<button
-          @click="
-            repo = '';
-            snapshot = undefined;
-            example = false;
-          "
-        >
-          Exit preview<X :size="12" />
-        </button>
-      </div>
-      <ChatTabs v-show="chatVisible" ref="chatNavigation" :ids="chatTabs.ids" :selected="selectedThreadId" :threads="threads" :projects="projects"
-        :activity="chatIndicators" :repository-name="w.repositoryName" :actions="chatActions" :disabled="busy || example"
-        @error="error = $event"
-        @select="selectChat" @close="closeChat" @move="(id, target) => chatTabs = moveChatTab(chatTabs, id, target)" @new="openNewConversation" />
       <template v-if="snapshot">
-        <div v-if="snapshot.operation" class="operation-banner">
-          <GitMerge :size="16" /><strong
-            >{{ snapshot.operation }} in progress</strong
-          ><span>Resolve conflicts or amend, then continue.</span
-          ><button
-            class="small"
-            @click="ask('abort', { mode: snapshot.operation })"
-          >
-            Abort</button
-          ><button
-            class="primary small"
-            @click="conflictOpen = true"
-          >
-            {{ snapshot.files.some(file => file.conflict) ? 'Resolve conflicts' : 'Continue' }}
-          </button>
-        </div>
-        <div v-if="error" class="error-banner" role="alert">
-          <AlertTriangle :size="15" /><span>{{ error }}</span
-          ><button
-            class="icon-button"
-            aria-label="Dismiss error"
-            @click="error = ''"
-          >
-            <X :size="14" />
-          </button>
-        </div>
         <template v-if="view === 'changes'">
           <div v-if="!chatVisible" class="changes-title">
             <div>
@@ -1470,7 +1472,6 @@ onUnmounted(() => {
           ><span><Layers :size="16" />Parallel worktrees</span
           ><span><MessageSquare :size="16" />Shared conversations</span>
         </div>
-        <div v-if="error" class="inline-error">{{ error }}</div>
       </div>
       <div v-if="busy || notice" class="workspace-status" role="status">
         <LoaderCircle v-if="busy" :size="14" class="spin" />

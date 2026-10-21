@@ -27,9 +27,10 @@ import { conversationDefaults, conversationPresets, conversationPrompt, conversa
 import type { ConversationTicket } from '~/lib/conversation-presets';
 import { isThreadRunning, repositoryThreads } from "~/lib/threads";
 import { chatActivity } from "~/lib/chat-tabs";
+import { chatModelChoices, preferredChatModel, modelSettingDefaults, chatModelSelection, defaultConversationModel } from '~/lib/chat-models';
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop, git } from "~/lib/native";
-import type { T3Thread, T3Project, T3Projection, T3ImageAttachment, T3Skill } from "~/lib/types";
+import type { T3Thread, T3Project, T3Projection, T3ImageAttachment, T3Skill, T3ModelProvider } from "~/lib/types";
 const props = defineProps<{
   context: string;
   example: boolean;
@@ -76,21 +77,36 @@ function selectTicket(ticket: ConversationTicket) {
 const needsTicket = computed(() => 'ticket' in newPreset.value);
 const useNewWorktree = ref(true);
 const newChatError = ref("");
-const canCreate = computed(() => connected.value && !creating.value && !!newProject.value && !!newModel.value && !!newWorktree.value.trim() && (!needsTicket.value || !!newTicket.value.trim()));
+const canCreate = computed(() => connected.value && !creating.value && !modelsLoading.value && !!newProject.value && !!selectedModel.value && !!newWorktree.value.trim() && (!needsTicket.value || !!newTicket.value.trim()));
 const presetIcons = [MessageSquare, Search, Code2, Bug, ShieldCheck];
-const modelOptions = computed(() => {
-  const options = new Map<string, { instanceId: string; model: string }>();
-  for (const selection of [
-    ...projects.value.map((p) => p.defaultModelSelection),
-    ...threads.value.map((t) => t.modelSelection),
-  ]) {
-    if (selection) options.set(JSON.stringify(selection), selection);
-  }
-  return [...options].map(([value, selection]) => ({
-    value,
-    label: `${selection.instanceId} · ${selection.model}`,
-  }));
+const modelProviders = ref<T3ModelProvider[]>([]);
+const modelsLoading = ref(false), modelCatalogError = ref('');
+const modelSettings = ref<Record<string, string | boolean>>({});
+const modelOptions = computed(() => chatModelChoices(modelProviders.value, [
+  ...projects.value.map(project => project.defaultModelSelection), ...threads.value.map(thread => thread.modelSelection),
+]));
+const selectedModel = computed(() => modelOptions.value.find(option => option.value === newModel.value));
+const hasPreferredModel = computed(() => modelOptions.value.some(option => option.selection.model === defaultConversationModel));
+watch(() => JSON.stringify([newModel.value, selectedModel.value?.settings]), () => {
+  modelSettings.value = modelSettingDefaults(selectedModel.value?.settings || []);
 });
+let modelRequest = 0;
+async function loadModels() {
+  const request = ++modelRequest;
+  modelsLoading.value = true;
+  modelCatalogError.value = '';
+  try {
+    const providers = await client.listModels();
+    if (request !== modelRequest) return;
+    modelProviders.value = providers;
+    newModel.value = preferredChatModel(modelOptions.value,
+      projects.value.find(project => project.id === newProject.value)?.defaultModelSelection || undefined);
+  } catch (e) {
+    if (request === modelRequest) modelCatalogError.value = `Could not load model options. ${String(e)}`;
+  } finally {
+    if (request === modelRequest) modelsLoading.value = false;
+  }
+}
 const drafts = new Map<string, string>();
 type DraftImage = { id: string; file: File; preview: string; uploaded?: T3ImageAttachment };
 const imageDrafts = ref<Record<string, DraftImage[]>>({});
@@ -354,7 +370,7 @@ async function create(preset: (typeof conversationPresets)[number]) {
       createdWorktree = true;
     }
     const projectId = newProject.value;
-    const modelSelection = JSON.parse(newModel.value);
+    const modelSelection = chatModelSelection(selectedModel.value!, modelSettings.value);
     const worktreePath = newWorktree.value.trim();
     const instruction = conversationPrompt(preset, newTicket.value);
     let ticket = matchingTicket(newTicket.value, selectedTicket.value ? [selectedTicket.value] : []);
@@ -401,13 +417,15 @@ function newChat(trigger?: HTMLButtonElement) {
   const defaults = conversationDefaults(props.repo, projects.value, thread.value);
   newProject.value = defaults.projectId;
   newWorktree.value = defaults.worktreePath;
-  newModel.value = defaults.modelSelection ? JSON.stringify(defaults.modelSelection) : modelOptions.value[0]?.value || "";
+  newModel.value = preferredChatModel(modelOptions.value, defaults.modelSelection);
+  modelSettings.value = modelSettingDefaults(selectedModel.value?.settings || []);
   newPreset.value = conversationPresets[0];
   newTicket.value = "";
   selectedTicket.value = undefined;
   useNewWorktree.value = true;
   newChatError.value = "";
   showNew.value = true;
+  void loadModels();
   void nextTick(() => newConversationDialog.value?.querySelector<HTMLButtonElement>('.conversation-preset')?.focus());
 }
 function changeNewProject(id: string) {
@@ -417,7 +435,7 @@ function changeNewProject(id: string) {
   selectedTicket.value = undefined;
   const project = projects.value.find(project => project.id === newProject.value);
   newWorktree.value = project?.workspaceRoot || "";
-  if (project?.defaultModelSelection) newModel.value = JSON.stringify(project.defaultModelSelection);
+  newModel.value = preferredChatModel(modelOptions.value, project?.defaultModelSelection || undefined);
 }
 function dismissNewDialog() {
   if (creating.value) return;
@@ -783,10 +801,32 @@ defineExpose({
             <label>{{ useNewWorktree ? 'Create from' : 'Existing worktree' }}<input v-model="newWorktree" :disabled="creating" placeholder="Worktree path" required /></label>
             <p class="conversation-hint">{{ useNewWorktree ? 'A new worktree will be created from HEAD at this path.' : 'This conversation will use this path without creating a worktree.' }}</p>
           </section>
-          <label>Model<select v-model="newModel" :disabled="creating">
-              <option v-for="option in modelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          <section class="conversation-section model-settings" aria-labelledby="conversation-model-heading">
+            <h3 id="conversation-model-heading">Model &amp; performance <span>Default: {{ defaultConversationModel }}</span></h3>
+            <label>Model<select v-model="newModel" :disabled="creating || modelsLoading">
+              <option disabled value="">{{ modelsLoading ? 'Loading models…' : 'Choose a model' }}</option>
+              <option v-for="option in modelOptions" :key="option.value" :value="option.value">{{ option.label }}{{ option.selection.model === defaultConversationModel ? ' · Default' : '' }}</option>
             </select></label>
-          <p v-if="!modelOptions.length">Configure a model in T3 Code first.</p>
+            <p v-if="modelsLoading" class="conversation-hint" role="status">Loading available models and performance options…</p>
+            <p v-if="modelCatalogError" class="conversation-hint" role="status">{{ modelCatalogError }} <button type="button" class="text-button" :disabled="creating || modelsLoading" @click="loadModels">Retry</button></p>
+            <p v-if="!modelsLoading && !modelOptions.length" class="conversation-hint">Configure a model in T3 Code first.</p>
+            <p v-else-if="!modelsLoading && !hasPreferredModel" class="conversation-hint">{{ defaultConversationModel }} is not available from your configured providers.</p>
+            <div v-for="setting in selectedModel?.settings || []" :key="setting.id" class="model-setting">
+              <template v-if="setting.type === 'select' && ['reasoningEffort', 'effort'].includes(setting.id)">
+                <span class="model-setting-label">{{ setting.label }}</span>
+                <div class="model-reasoning" role="group" :aria-label="setting.label">
+                  <button v-if="!setting.currentValue && !setting.options.some(option => option.isDefault)" type="button" :disabled="creating" :aria-pressed="modelSettings[setting.id] === ''" @click="modelSettings[setting.id] = ''">Provider default</button>
+                  <button v-for="option in setting.options" :key="option.id" type="button" :disabled="creating" :aria-pressed="modelSettings[setting.id] === option.id" :title="option.description" @click="modelSettings[setting.id] = option.id">{{ option.label }}</button>
+                </div>
+              </template>
+              <label v-else-if="setting.type === 'select'">{{ setting.label }}<select v-model="modelSettings[setting.id]" :disabled="creating">
+                <option v-if="!setting.currentValue && !setting.options.some(option => option.isDefault)" value="">Provider default</option>
+                <option v-for="option in setting.options" :key="option.id" :value="option.id">{{ option.label }}</option>
+              </select></label>
+              <label v-else class="force-option"><input v-model="modelSettings[setting.id]" type="checkbox" :disabled="creating" />{{ setting.label }}</label>
+              <p v-if="setting.description" class="conversation-hint">{{ setting.description }}</p>
+            </div>
+          </section>
           <p v-if="!connected">Reconnect T3 Code to create a conversation.</p>
           <div v-if="newChatError" class="inline-error" role="alert">{{ newChatError }}</div>
           </div>
@@ -830,6 +870,12 @@ defineExpose({
 .conversation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .conversation-section { margin-top: 20px; }
 .conversation-section:first-child { margin-top: 0; }
+.model-settings { padding-top: 18px; border-top: 1px solid #30394d; }
+.model-setting { margin-top: 14px; }
+.model-setting-label { display: block; margin-bottom: 8px; font-size: 11px; color: #9eadc8; }
+.model-reasoning { display: flex; flex-wrap: wrap; gap: 5px; }
+.model-reasoning button { padding: 7px 10px; border: 1px solid #35405a; background: #171c26; font-size: 11px; }
+.model-reasoning button[aria-pressed="true"] { color: #e3e9ff; border-color: #8ca5e7; background: #27334b; }
 .conversation-section h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; font-size: 12px; font-weight: 600; }
 .conversation-section h3 > span { color: #8998b4; font-size: 11px; font-weight: 400; }
 .conversation-projects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; max-height: 190px; overflow-y: auto; }

@@ -37,6 +37,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it('reads model capabilities from the server catalog', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const loading = client.listModels();
+    const command = socket.sent.at(-1);
+    expect(command).toMatchObject({ tag: 'server.getConfig', payload: {} });
+    const providers = [{ instanceId: 'codex', models: [{ slug: 'gpt-6.1-sol', name: 'GPT-6.1 Sol',
+      capabilities: { optionDescriptors: [{ id: 'serviceTier', type: 'select', options: [{ id: 'fast', label: 'Fast' }] }] } }] }];
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: { providers } } });
+    expect(await loading).toEqual(providers);
+  });
   it('keeps background chat subscriptions and activity separate when switching or closing tabs', async () => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);
@@ -185,7 +198,9 @@ describe("T3 client contract", () => {
     } }] });
     const acknowledge = (value: unknown) => socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id,
       exit: { _tag: "Success", value } });
-    const modelSelection = { instanceId: "codex", model: "test" };
+    const modelSelection = { instanceId: "codex", model: "gpt-6.1-sol", options: [
+      { id: 'reasoningEffort', value: 'high' }, { id: 'serviceTier', value: 'fast' },
+    ] };
     const creating = client.createThread("project", "New conversation", modelSelection, "D:/feature");
     const creation = socket.sent.at(-1);
     expect(creation.payload).toMatchObject({ title: legacy ? "New thread" : "New conversation", projectId: "project", modelSelection, runtimeMode: "full-access" });

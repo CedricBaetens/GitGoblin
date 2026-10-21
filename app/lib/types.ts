@@ -51,12 +51,30 @@ export interface GitRequest {
   limit?: number;
   files?: { path: string; fingerprint?: string }[];
 }
+export interface T3ModelSelection {
+  instanceId: string;
+  model: string;
+  options?: { id: string; value: string | boolean }[];
+}
+export type T3ModelOption = {
+  id: string;
+  label: string;
+  description?: string;
+} & ({ type: 'select'; currentValue?: string; options: { id: string; label: string; description?: string; isDefault?: boolean }[] }
+  | { type: 'boolean'; currentValue?: boolean });
+export interface T3ModelProvider {
+  instanceId: string;
+  displayName?: string;
+  enabled?: boolean;
+  installed?: boolean;
+  models: { slug: string; name: string; capabilities?: { optionDescriptors?: T3ModelOption[] } | null }[];
+}
 export interface T3Project {
   id: string;
   title?: string;
   name?: string;
   workspaceRoot: string;
-  defaultModelSelection?: { instanceId: string; model: string } | null;
+  defaultModelSelection?: T3ModelSelection | null;
 }
 export interface T3Thread {
   settledOverride?: "settled" | "active" | null;
@@ -74,7 +92,7 @@ export interface T3Thread {
   worktreePath: string | null;
   status: string;
   activeRunId: string | null;
-  modelSelection: { instanceId: string; model: string };
+  modelSelection: T3ModelSelection;
   runtimeMode: string;
   interactionMode: string;
 }

@@ -1,4 +1,4 @@
-import type { T3Project, T3Thread, T3Projection, T3ImageAttachment } from "./types";
+import type { T3Project, T3Thread, T3Projection, T3ImageAttachment, T3ModelProvider } from "./types";
 import { availableSkills } from './chat-skills';
 
 type Json = Record<string, any>;
@@ -379,6 +379,11 @@ export class T3Client {
   }
   dispatch(command: Json) {
     return this.call("orchestration.dispatchCommand", command);
+  }
+  async listModels(): Promise<T3ModelProvider[]> {
+    const result = await this.call('server.getConfig', {});
+    if (!Array.isArray(result.providers)) throw new Error('T3 did not provide a model catalog.');
+    return result.providers;
   }
   async listSkills(instanceId: string, cwd: string) {
     const result = await this.call('server.refreshProviders', { instanceId, cwd });
