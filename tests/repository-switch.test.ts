@@ -101,3 +101,41 @@ it('keeps the previous repository open if the new repository cannot load', async
   expect(workbench.busy.value).toBe(false);
   scope.stop();
 });
+
+it('opens changes without waiting for slow commit history', async () => {
+  let finishHistory!: (value: never[]) => void;
+  vi.mocked(git).mockImplementation(async request => request.action === 'snapshot'
+    ? { ...demoSnapshot, root: 'D:/fast', files: [] }
+    : new Promise(done => { finishHistory = done; }));
+  const scope = effectScope();
+  const workbench = scope.run(() => useWorkbench())!;
+  let opened = false;
+  const opening = workbench.openRepo('D:/fast').then(() => { opened = true; });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(workbench.repo.value).toBe('D:/fast');
+  const completedBeforeHistory = opened;
+  finishHistory([]);
+  await opening;
+  expect(completedBeforeHistory).toBe(true);
+  scope.stop();
+});
+
+it('lets the latest repository switch win when snapshots finish out of order', async () => {
+  const pending = new Map<string, (value: typeof demoSnapshot) => void>();
+  vi.mocked(git).mockImplementation(async request => request.action === 'snapshot'
+    ? new Promise(done => { pending.set(request.repo, done); }) : []);
+  const scope = effectScope();
+  const workbench = scope.run(() => useWorkbench())!;
+  const first = workbench.openRepo('D:/first');
+  expect(workbench.repositoryLoading.value).toBe(true);
+  const second = workbench.openRepo('D:/second');
+  expect(pending.size).toBe(2);
+  pending.get('D:/second')!({ ...demoSnapshot, root: 'D:/second', files: [] });
+  await second;
+  pending.get('D:/first')!({ ...demoSnapshot, root: 'D:/first', files: [] });
+  await first;
+  expect(workbench.repo.value).toBe('D:/second');
+  expect(workbench.repositoryLoading.value).toBe(false);
+  expect(workbench.busy.value).toBe(false);
+  scope.stop();
+});

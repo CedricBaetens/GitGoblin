@@ -1,5 +1,6 @@
 import type { T3Project, T3Thread, T3Projection, T3ImageAttachment, T3ModelProvider } from "./types";
 import { availableSkills } from './chat-skills';
+import { isThreadRunning } from './threads';
 
 type Json = Record<string, any>;
 type Pending = {
@@ -442,6 +443,16 @@ export class T3Client {
       threadId: thread.id,
       runId: thread.activeRunId,
       holdQueue: true,
+    });
+  }
+  switchWorktree(thread: T3Thread, worktreePath: string, branch: string | null) {
+    if (isThreadRunning(thread)) {
+      return Promise.reject(new Error("Stop the agent before switching worktrees."));
+    }
+    if (!worktreePath.trim()) return Promise.reject(new Error("Choose a worktree."));
+    return this.dispatch({
+      type: "thread.meta.update", commandId: crypto.randomUUID(), threadId: thread.id,
+      worktreePath, branch,
     });
   }
   settle(threadId: string) {

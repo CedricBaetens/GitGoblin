@@ -246,6 +246,7 @@ function context() {
     <div v-if="error" class="inline-error">{{ error }}</div>
     <div class="diff-body">
     <div class="diff-main">
+    <div v-if="loading && !text" class="diff-pending" role="status"><LoaderCircle :size="22" class="spin" /><span>Loading changes...</span></div>
     <div ref="scroller" class="diff-scroll" @contextmenu="openSelectionMenu" @scroll="onScroll">
       <div class="diff-content" :style="large && layout !== 'split' ? { minWidth: `${geometry.width}px` } : undefined">
       <template v-for="(file, fileIndex) in files" :key="fileIndex">
@@ -387,4 +388,9 @@ function context() {
 .empty-cell { background: #ffffff03; }
 .diff-file-label { padding: 9px 12px; color: #bac7e0; font-size: 11px; background: #1b2030; overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .diff-actions { flex-wrap: wrap; } }
+</style>
+
+<style scoped>
+.diff-main { position: relative; }
+.diff-pending { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: #171c26; color: #96a3ba; pointer-events: none; }
 </style>

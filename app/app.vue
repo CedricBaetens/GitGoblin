@@ -306,7 +306,7 @@ watch([selectedThreadId, chatVisible, chatActivityStates], () => {
   if (chatVisible.value && activity?.response && seenResponses.value[id] !== activity.response) { seenResponses.value[id] = activity.response; persistChatTabs(); }
 });
 function selectChat(id: string) {
-  if (busy.value) return;
+  if (busy.value && !w.repositoryLoading.value) return;
   chatNavigation.value?.closePicker();
   chatVisible.value = true;
   if (selectedThreadId.value === id) {
@@ -751,7 +751,7 @@ async function openThreadWorktree(path: string, threadId: string) {
       scroll:
         document.querySelector(".review-panel .diff-scroll")?.scrollTop || 0,
     });
-  if (normalized(path) !== normalized(repo.value)) await w.openRepo(path);
+  if (normalized(path) !== normalized(repo.value) || w.repositoryLoading.value) await w.openRepo(path);
   if (normalized(path) !== normalized(repo.value) || selectedThreadId.value !== threadId) return;
   currentChat = threadId;
   const saved = chatViews.get(threadId);
@@ -760,9 +760,11 @@ async function openThreadWorktree(path: string, threadId: string) {
     view.value = saved.view;
     base.value = saved.base;
     await nextTick();
+    if (selectedThreadId.value !== threadId) return;
     selected.value = saved.selected;
     await w.loadDiff();
     await nextTick();
+    if (selectedThreadId.value !== threadId) return;
     const scroller = document.querySelector(".review-panel .diff-scroll");
     if (scroller) scroller.scrollTop = saved.scroll;
   }
@@ -909,7 +911,7 @@ onUnmounted(() => {
         </template>
       </div>
       <ChatTabs v-show="chatVisible" ref="chatNavigation" :ids="chatTabs.ids" :selected="selectedThreadId" :threads="threads" :projects="projects"
-        :activity="chatIndicators" :repository-name="w.repositoryName" :actions="chatActions" :disabled="busy || example"
+        :activity="chatIndicators" :repository-name="w.repositoryName" :actions="chatActions" :disabled="(busy && !w.repositoryLoading.value) || example"
         @error="error = $event"
         @select="selectChat" @close="closeChat" @move="(id, target) => chatTabs = moveChatTab(chatTabs, id, target)" @new="openNewConversation" />
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
@@ -1209,6 +1211,7 @@ onUnmounted(() => {
         :repo="repo"
         :selected-thread-id="selectedThreadId"
         :open-thread-ids="chatTabs.ids"
+        :worktrees="snapshot?.worktrees || []"
         @activity="chatActivityStates = $event"
         @clear-context="context = ''"
         @select-worktree="openThreadWorktree"
@@ -1289,8 +1292,9 @@ onUnmounted(() => {
                 </div>
               </form>
             </section>
-            <section class="review-panel">
-              <template v-if="selected"
+            <section class="review-panel" :aria-busy="w.repositoryLoading.value || diffLoading">
+              <div v-if="w.repositoryLoading.value" class="panel-empty" role="status"><LoaderCircle :size="24" class="spin" /><p>Loading worktree changes...</p></div>
+              <template v-else-if="selected"
                 ><div class="file-heading">
                   <FileCode2 :size="15" /><span :title="selected">{{
                     selected

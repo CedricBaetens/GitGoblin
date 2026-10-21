@@ -25,7 +25,7 @@ import { insertSkill, searchSkills, skillTrigger } from '~/lib/chat-skills';
 import { pendingQuestions } from '~/lib/chat-questions';
 import { conversationDefaults, conversationPresets, conversationPrompt, conversationTitle, matchingTicket, ticketReference, newConversationWorktree } from '~/lib/conversation-presets';
 import type { ConversationTicket } from '~/lib/conversation-presets';
-import { isThreadRunning, repositoryThreads } from "~/lib/threads";
+import { isThreadRunning, repositoryThreads, repositoryThreadKey } from "~/lib/threads";
 import { chatActivity } from "~/lib/chat-tabs";
 import { chatModelChoices, preferredChatModel, modelSettingDefaults, chatModelSelection, defaultConversationModel } from '~/lib/chat-models';
 import { T3Client, parsePairing } from "~/lib/t3";
@@ -38,6 +38,7 @@ const props = defineProps<{
   visible: boolean;
   selectedThreadId: string;
   openThreadIds: string[];
+  worktrees: { path: string; branch: string }[];
 }>();
 const emit = defineEmits<{
   clearContext: [];
@@ -106,6 +107,21 @@ async function loadModels() {
   } finally {
     if (request === modelRequest) modelsLoading.value = false;
   }
+}
+const switchingWorktree = ref(false);
+const currentWorktree = computed(() => thread.value?.worktreePath || projects.value.find(project => project.id === thread.value?.projectId)?.workspaceRoot || '');
+const chatWorktrees = computed(() => repositoryThreadKey(props.repo) === repositoryThreadKey(currentWorktree.value) ? props.worktrees : []);
+async function switchWorktree(event: Event) {
+  const select = event.target as HTMLSelectElement;
+  const target = chatWorktrees.value.find(tree => tree.path === select.value);
+  select.value = currentWorktree.value;
+  if (!thread.value || !target || busy.value || sending.value || switchingWorktree.value) return;
+  switchingWorktree.value = true;
+  error.value = '';
+  try {
+    await client.switchWorktree(thread.value, target.path, target.branch || null);
+  } catch (e) { error.value = String(e); }
+  finally { switchingWorktree.value = false; }
 }
 const drafts = new Map<string, string>();
 type DraftImage = { id: string; file: File; preview: string; uploaded?: T3ImageAttachment };
@@ -286,6 +302,7 @@ async function pair() {
   }
 }
 async function send() {
+  if (switchingWorktree.value) return;
   if (!thread.value || (!prompt.value.trim() && !images.value.length) || sending.value || settlingId.value) return;
   sending.value = true;
   error.value = "";
@@ -533,6 +550,13 @@ defineExpose({
       </div>
     </template>
     <template v-else-if="connected">
+      <label v-if="thread" class="chat-worktree-picker">
+        <FolderGit2 :size="14" />
+        <select aria-label="Chat worktree" :value="currentWorktree" :disabled="busy || sending || switchingWorktree" :title="busy ? 'Stop the agent before switching worktrees.' : currentWorktree" @change="switchWorktree">
+          <option v-if="!chatWorktrees.some(tree => tree.path === currentWorktree)" :value="currentWorktree">{{ currentWorktree }}</option>
+          <option v-for="tree in chatWorktrees" :key="tree.path" :value="tree.path">{{ tree.branch || 'Detached HEAD' }} &middot; {{ tree.path }}</option>
+        </select>
+      </label>
       <div v-if="activeMatchingThreads.length > 1" class="shared-note">
         {{ activeMatchingThreads.length }} agents are working in this worktree.
       </div>
@@ -918,4 +942,9 @@ defineExpose({
 .activity-error { color: #e48791; }
 .streaming-label { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: #9baed4; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+</style>
+
+<style scoped>
+.chat-worktree-picker { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #96a3ba; }
+.chat-worktree-picker select { min-width: 0; flex: 1; background: #171c26; color: inherit; border: 1px solid #35405a; border-radius: 4px; padding: 5px; }
 </style>

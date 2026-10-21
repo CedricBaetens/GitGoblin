@@ -37,6 +37,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it.each([false, true])('switches an idle chat worktree through T3 (legacy=%s)', async legacy => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [{ kind: 'snapshot', snapshot: {
+      ...(legacy ? { snapshotSequence: 1 } : { schemaVersion: 2 }), projects: [], threads: [],
+    } }] });
+    const thread = { id: 'one', status: 'idle', activeRunId: null } as Parameters<T3Client['switchWorktree']>[0];
+    const switching = client.switchWorktree(thread, 'D:/feature', 'feature');
+    const command = socket.sent.at(-1);
+    expect(command).toMatchObject({ tag: 'orchestration.dispatchCommand', payload: {
+      type: 'thread.meta.update', threadId: 'one', worktreePath: 'D:/feature', branch: 'feature',
+    } });
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: {} } });
+    await switching;
+    const sent = socket.sent.length;
+    await expect(client.switchWorktree({ ...thread, activeRunId: 'run' }, 'D:/other', null)).rejects.toThrow('Stop the agent');
+    await expect(client.switchWorktree({ ...thread, status: 'starting' }, 'D:/other', null)).rejects.toThrow('Stop the agent');
+    await expect(client.switchWorktree(thread, ' ', null)).rejects.toThrow('Choose a worktree');
+    expect(socket.sent).toHaveLength(sent);
+  });
+
   it('reads model capabilities from the server catalog', async () => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);

@@ -51,6 +51,8 @@ export function useWorkbench() {
   }
   const diffCache = createDiffCache();
   const diffLoading = ref(false);
+  const repositoryLoading = ref(false);
+  let repositoryRequest = 0;
   const wholeFile = ref(false);
   let displayedDiffKey = "";
   let warmupGeneration = 0;
@@ -159,7 +161,7 @@ export function useWorkbench() {
     }
   }
   async function refresh(full = false) {
-    if (!repo.value || example.value || polling || busy.value) return;
+    if (!repo.value || example.value || polling || busy.value || repositoryLoading.value) return;
     const request = generation;
     polling = true;
     try {
@@ -190,7 +192,7 @@ export function useWorkbench() {
     }
   }
   async function openRepo(path?: string) {
-    if (busy.value) {
+    if (busy.value && !repositoryLoading.value) {
       error.value =
         "Wait for the current Git operation before switching repositories.";
       return;
@@ -207,12 +209,17 @@ export function useWorkbench() {
         title: "Open a Git repository",
       }));
     if (typeof result !== "string") return;
+    const request = ++repositoryRequest;
+    generation++;
+    diffGeneration++;
+    historyGeneration++;
+    warmupGeneration++;
+    repositoryLoading.value = true;
     busy.value = true;
     error.value = "";
     try {
-      // Keep the current workspace intact until the replacement snapshot is ready.
-      while (polling) await new Promise((resolve) => setTimeout(resolve, 30));
       const loaded = await git<Snapshot>({ repo: result, action: "snapshot" });
+      if (request !== repositoryRequest) return;
       generation++;
       historyGeneration++;
       historyLoading.value = false;
@@ -231,7 +238,8 @@ export function useWorkbench() {
       mode.value = "working";
       base.value = comparisonBase(loaded, base.value);
       selected.value = currentFiles.value[0]?.path || "";
-      await Promise.all([loadDiff(), loadHistory(true)]);
+      void loadDiff();
+      void loadHistory(true);
       const repositoryRoot = loaded.repositoryRoot || loaded.worktrees[0]?.path || loaded.root;
       const worktreePaths = new Set(loaded.worktrees.map(tree => normalize(tree.path)));
       recent.value = [
@@ -240,15 +248,19 @@ export function useWorkbench() {
       ].slice(0, 12);
       try {
         await invoke("repositories_save", { repositories: recent.value });
-        recent.value = await invoke<string[]>("repositories_load");
+        const saved = await invoke<string[]>("repositories_load");
+        if (request === repositoryRequest) recent.value = saved;
       } catch (e) {
-        error.value = `Repository opened, but history could not be saved: ${e}`;
+        if (request === repositoryRequest) error.value = `Repository opened, but history could not be saved: ${e}`;
       }
     } catch (e) {
-      error.value = String(e);
+      if (request === repositoryRequest) error.value = String(e);
     } finally {
-      busy.value = false;
-      void warmDiffs();
+      if (request === repositoryRequest) {
+        repositoryLoading.value = false;
+        busy.value = false;
+        void warmDiffs();
+      }
     }
   }
   function showExample() {
@@ -511,6 +523,7 @@ export function useWorkbench() {
     selected,
     diff,
     diffLoading,
+    repositoryLoading,
     wholeFile,
     mode,
     base,
