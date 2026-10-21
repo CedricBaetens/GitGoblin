@@ -207,6 +207,26 @@ describe("T3 client contract", () => {
     await followup;
   });
 
+  it.each([false, true])("preserves an explicit ticket title without requesting title generation (legacy=%s)", async legacy => {
+    const client = new T3Client(async () => "ws://127.0.0.1/ws");
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    socket.receive({ _tag: "Chunk", requestId: socket.sent[0].id, values: [{ kind: "snapshot", snapshot: {
+      ...(legacy ? { snapshotSequence: 1 } : { schemaVersion: 2 }), projects: [], threads: [],
+    } }] });
+    const title = '#42 · Fix login · Triage';
+    const modelSelection = { instanceId: 'codex', model: 'test' };
+    const creating = client.createThread('project', title, modelSelection);
+    expect(socket.sent.at(-1).payload.title).toBe(title);
+    socket.receive({ _tag: 'Exit', requestId: socket.sent.at(-1).id, exit: { _tag: 'Success', value: { threadId: 'new' } } });
+    const { threadId } = await creating;
+    const sending = client.sendMessage({ id: threadId, title, modelSelection } as any, '/triage #42');
+    expect(socket.sent.at(-1).payload.titleSeed).toBeUndefined();
+    socket.receive({ _tag: 'Exit', requestId: socket.sent.at(-1).id, exit: { _tag: 'Success', value: {} } });
+    await sending;
+  });
+
   it.each(["New conversation", "New thread"])("seeds a restored empty %s but preserves an existing conversation title", async title => {
     const client = new T3Client(async () => "ws://127.0.0.1/ws");
     clients.push(client);

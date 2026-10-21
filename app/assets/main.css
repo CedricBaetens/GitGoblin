@@ -1662,6 +1662,3 @@ body:has(.pane-resize.horizontal.dragging), body:has(.pane-resize.horizontal.dra
 .hljs-type, .hljs-built_in, .hljs-name { color: #81cbd1; }
 .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-selector-class { color: #9bc8ef; }
 .hljs-meta, .hljs-doctag { color: #a8b6ec; }
-
-.chat-navigation-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; }
-.chat-navigation-bar > button:first-child { flex: 1; justify-content: flex-start; gap: 8px; font-size: 12px; }

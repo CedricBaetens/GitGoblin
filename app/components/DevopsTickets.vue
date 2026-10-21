@@ -2,11 +2,12 @@
 import { ref, watch, onUnmounted } from 'vue';
 import { Search, LoaderCircle, Check } from 'lucide-vue-next';
 import { desktop, invoke } from '~/lib/native';
+import type { ConversationTicket } from '~/lib/conversation-presets';
 
 interface Ticket { id: number; title: string; state: string; kind: string; assignedTo: string; url: string }
 interface Results { organization: string; project: string; tickets: Ticket[] }
 const props = defineProps<{ repo: string; selected: string; disabled: boolean }>();
-const emit = defineEmits<{ select: [reference: string] }>();
+const emit = defineEmits<{ select: [ticket: ConversationTicket] }>();
 const query = ref(''), loading = ref(false), error = ref('');
 const results = ref<Results>();
 let generation = 0;
@@ -45,7 +46,7 @@ onUnmounted(() => { clearTimeout(timer); generation++; });
       <p class="ticket-status">{{ query.trim() ? 'Search results' : 'Your active tickets' }} · {{ results.project }}</p>
       <div v-if="results.tickets.length" class="ticket-results">
         <button v-for="ticket in results.tickets" :key="ticket.id" type="button" :disabled="disabled"
-          :aria-pressed="selected === ticket.url" @click="emit('select', ticket.url)">
+          :aria-pressed="selected === ticket.url" @click="emit('select', ticket)">
           <span class="ticket-number">#{{ ticket.id }}</span>
           <span class="ticket-summary"><strong>{{ ticket.title }}</strong><small>{{ [ticket.kind, ticket.state, ticket.assignedTo].filter(Boolean).join(' · ') }}</small></span>
           <Check v-if="selected === ticket.url" :size="14" />

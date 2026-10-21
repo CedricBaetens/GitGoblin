@@ -1,6 +1,41 @@
 import type { T3Project, T3Thread } from "./types";
 import { repositoryThreadKey } from "./threads";
 
+export interface ConversationTicket { id: number; title: string; url: string }
+
+export function ticketReference(reference: string) {
+  const value = reference.trim();
+  const number = value.match(/^#?(\d+)$/)?.[1];
+  if (number) return { id: Number(number) };
+  try {
+    const url = new URL(value);
+    const id = url.pathname.match(/\/_workitems\/edit\/(\d+)\/?$/i)?.[1];
+    if (url.protocol === 'https:' && (url.hostname === 'dev.azure.com' || url.hostname.endsWith('.visualstudio.com')) && id) {
+      return { id: Number(id), url };
+    }
+  } catch { /* A description is also a valid ticket instruction. */ }
+  return undefined;
+}
+
+export function matchingTicket(reference: string, tickets: ConversationTicket[]) {
+  const parsed = ticketReference(reference);
+  return parsed && tickets.find(ticket => {
+    if (ticket.id !== parsed.id) return false;
+    if (!parsed.url) return true;
+    const url = new URL(ticket.url);
+    return url.origin === parsed.url.origin && url.pathname.replace(/\/$/, '') === parsed.url.pathname.replace(/\/$/, '');
+  });
+}
+
+export function conversationTitle(preset: (typeof conversationPresets)[number], reference: string, ticket?: ConversationTicket) {
+  if (!('ticket' in preset)) return 'New conversation';
+  const id = ticketReference(reference)?.id;
+  if (!id) return 'New conversation';
+  const title = ticket?.title.trim().replace(/\s+/g, ' ');
+  const action = preset.prompt === '/triage ' ? 'Triage' : 'Implement';
+  return `#${id}${title ? ` · ${title}` : ''} · ${action}`;
+}
+
 export const conversationPresets = [
   { label: "Blank", description: "Start with your own instruction.", prompt: "" },
   { label: "Triage ticket", description: "Investigate a ticket and clarify the scope.", prompt: "/triage ", ticket: true, skill: "mattpocock-skills:triage" },

@@ -984,10 +984,6 @@ onUnmounted(() => {
         <FolderGit2 :size="12" />
         <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
       </div>
-      <div v-show="chatVisible" class="chat-navigation-bar">
-        <button aria-haspopup="dialog" @click="chatNavigation?.openAll()"><MessageSquare :size="14" />All chats</button>
-        <button class="icon-button" aria-label="New sidebar chat" title="New chat" :disabled="example || busy" @click="openNewConversation"><Plus :size="16" /></button>
-      </div>
       <div v-show="!chatVisible" ref="sidebarScroll" class="sidebar-scroll">
         <template v-if="snapshot">
           <nav v-show="!chatVisible" class="main-nav">

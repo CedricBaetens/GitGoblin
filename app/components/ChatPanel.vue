@@ -22,7 +22,8 @@ import { conversationTurns } from '~/lib/conversation-turns';
 import { imageMimeTypes, uploadChatImage, validateChatImages } from '~/lib/chat-images';
 import { insertSkill, searchSkills, skillTrigger } from '~/lib/chat-skills';
 import { pendingQuestions } from '~/lib/chat-questions';
-import { conversationDefaults, conversationPresets, conversationPrompt, newConversationWorktree } from '~/lib/conversation-presets';
+import { conversationDefaults, conversationPresets, conversationPrompt, conversationTitle, matchingTicket, ticketReference, newConversationWorktree } from '~/lib/conversation-presets';
+import type { ConversationTicket } from '~/lib/conversation-presets';
 import { isThreadRunning, repositoryThreads } from "~/lib/threads";
 import { chatActivity } from "~/lib/chat-tabs";
 import { T3Client, parsePairing } from "~/lib/t3";
@@ -66,6 +67,11 @@ const newConversationDialog = ref<HTMLElement>();
 const newConversationButton = ref<HTMLButtonElement>();
 const newPreset = ref<(typeof conversationPresets)[number]>(conversationPresets[0]);
 const newTicket = ref("");
+const selectedTicket = ref<ConversationTicket>();
+function selectTicket(ticket: ConversationTicket) {
+  newTicket.value = ticket.url;
+  selectedTicket.value = ticket;
+}
 const needsTicket = computed(() => 'ticket' in newPreset.value);
 const useNewWorktree = ref(false);
 const newChatError = ref("");
@@ -351,9 +357,18 @@ async function create(preset: (typeof conversationPresets)[number]) {
     const modelSelection = JSON.parse(newModel.value);
     const worktreePath = newWorktree.value.trim();
     const instruction = conversationPrompt(preset, newTicket.value);
+    let ticket = matchingTicket(newTicket.value, selectedTicket.value ? [selectedTicket.value] : []);
+    const reference = ticketReference(newTicket.value);
+    if ('ticket' in preset && !ticket && reference && desktop()) {
+      try {
+        const result = await invoke<{ tickets: ConversationTicket[] }>('devops_tickets', { repo: worktreePath, query: String(reference.id) });
+        ticket = matchingTicket(newTicket.value, result.tickets);
+      } catch { /* Keep ticket conversations usable when Azure DevOps lookup is unavailable. */ }
+    }
+    const title = conversationTitle(preset, newTicket.value, ticket);
     const result = await client.createThread(
       projectId,
-      "New conversation",
+      title,
       modelSelection,
       worktreePath,
     );
@@ -362,7 +377,7 @@ async function create(preset: (typeof conversationPresets)[number]) {
     if (instruction.trim()) {
       sending.value = true;
       try {
-        await client.sendMessage({ id: result.threadId, projectId, title: "New conversation", modelSelection,
+        await client.sendMessage({ id: result.threadId, projectId, title, modelSelection,
           worktreePath, branch: null, status: "idle", activeRunId: null, runtimeMode: "full-access", interactionMode: "default" }, instruction);
         drafts.delete(result.threadId);
         if (selectedId.value === result.threadId && prompt.value === instruction) prompt.value = "";
@@ -389,6 +404,7 @@ function newChat(trigger?: HTMLButtonElement) {
   newModel.value = defaults.modelSelection ? JSON.stringify(defaults.modelSelection) : modelOptions.value[0]?.value || "";
   newPreset.value = conversationPresets[0];
   newTicket.value = "";
+  selectedTicket.value = undefined;
   useNewWorktree.value = false;
   newChatError.value = "";
   showNew.value = true;
@@ -396,6 +412,7 @@ function newChat(trigger?: HTMLButtonElement) {
 }
 function changeNewProject() {
   newTicket.value = "";
+  selectedTicket.value = undefined;
   const project = projects.value.find(project => project.id === newProject.value);
   newWorktree.value = project?.workspaceRoot || "";
   if (project?.defaultModelSelection) newModel.value = JSON.stringify(project.defaultModelSelection);
@@ -733,7 +750,7 @@ defineExpose({
             </button>
           </div>
           <template v-if="needsTicket">
-            <DevopsTickets :repo="newWorktree" :selected="newTicket" :disabled="creating" @select="newTicket = $event" />
+            <DevopsTickets :repo="newWorktree" :selected="newTicket" :disabled="creating" @select="selectTicket" />
             <label>Ticket URL, number, or description<textarea v-model="newTicket" :disabled="creating" rows="2" required placeholder="Select a ticket above, or enter a URL, #123, or description" /></label>
           </template>
           <div class="conversation-options">
