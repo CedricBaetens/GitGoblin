@@ -244,6 +244,7 @@ const sidebarPositions = { git: 0, chat: 0 };
 watch(workspaceMode, (mode) => {
   menu.value = false;
   sidebarMenu.value?.close();
+  repositoryMenu.value?.hidePopover();
   try { localStorage.setItem('gitgoblin.workspaceMode', mode); } catch { /* Modes work without storage. */ }
 });
 watch(workspaceMode, async (mode, previous) => {
@@ -886,16 +887,18 @@ onUnmounted(() => {
         <button :disabled="busy" @click="chooseRepository()"><FolderOpen :size="15" />Open repository…<kbd>Ctrl O</kbd></button>
         <button v-if="!desktop()" @click="fileMenu?.hidePopover(); w.showExample()"><Layers :size="15" />Explore example workspace</button>
       </div>
-      <nav v-if="favorites.length" class="favorite-tabs" data-tauri-drag-region="false" aria-label="Favorite repositories">
+      <nav v-if="!chatVisible && favorites.length" class="favorite-tabs" data-tauri-drag-region="false" aria-label="Favorite repositories">
         <button v-for="path in favorites" :key="path" aria-haspopup="menu" @contextmenu="repositoryContext($event, path)" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
           <Star :size="12" fill="currentColor" /><span>{{ w.repositoryName(path) }}</span>
         </button>
       </nav>
       <div class="titlebar-context">
+        <template v-if="!chatVisible">
         <button class="repository-switch" popovertarget="repository-menu" aria-label="Switch repository" :disabled="busy" :title="repo || 'Switch repository'">
           <FolderGit2 :size="15" /><strong>{{ snapshot ? repoName : 'Repositories' }}</strong><ChevronDown :size="12" />
         </button>
         <template v-if="snapshot"><span class="context-divider">/</span><GitBranch :size="13" /><span :title="snapshot.branch">{{ snapshot.branch }}</span></template>
+        </template>
       </div>
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
         <div class="repository-menu-heading">Recent repositories</div>
