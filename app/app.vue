@@ -281,6 +281,10 @@ const threads = ref<T3Thread[]>([]),
   t3Connected = ref(false);
 const chatTabs = ref(restoreChatTabs(null));
 const selectedThreadId = computed(() => chatTabs.value.selected);
+const selectedChatWorktree = computed(() => {
+  const thread = threads.value.find(thread => thread.id === selectedThreadId.value);
+  return thread?.worktreePath || projects.value.find(project => project.id === thread?.projectId)?.workspaceRoot || '';
+});
 const chatNavigation = ref<{ openAll: (openOnly?: boolean) => void; closePicker: () => void }>();
 const chatActivityStates = ref<Record<string, { attention: boolean; response: string }>>({});
 const seenResponses = ref<Record<string, string>>({});
@@ -976,13 +980,10 @@ onUnmounted(() => {
           }}</span>
         </div>
       </div>
-      <label v-if="snapshot && chatVisible && snapshot.worktrees.length > 1" class="chat-worktree-picker">
-        Worktree
-        <select :value="snapshot.worktrees.find(tree => normalized(tree.path) === normalized(repo))?.path || repo" :disabled="busy || example" @change="w.openRepo(($event.target as HTMLSelectElement).value)">
-          <option v-if="!snapshot.worktrees.some(tree => normalized(tree.path) === normalized(repo))" :value="repo">{{ snapshot.branch || repoName }}</option>
-          <option v-for="tree in snapshot.worktrees" :key="tree.path" :value="tree.path">{{ tree.branch || 'Detached HEAD' }} · {{ tree.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</option>
-        </select>
-      </label>
+      <div v-if="chatVisible && selectedChatWorktree" class="chat-worktree-label" :title="selectedChatWorktree">
+        <FolderGit2 :size="12" />
+        <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
+      </div>
       <div v-show="chatVisible" class="chat-navigation-bar">
         <button aria-haspopup="dialog" @click="chatNavigation?.openAll()"><MessageSquare :size="14" />All chats</button>
         <button class="icon-button" aria-label="New sidebar chat" title="New chat" :disabled="example || busy" @click="openNewConversation"><Plus :size="16" /></button>
