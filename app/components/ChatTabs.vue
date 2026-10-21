@@ -58,7 +58,7 @@ function tabKey(event: KeyboardEvent, id: string) {
   else if (event.key === 'ArrowLeft') target = props.ids[(index - 1 + props.ids.length) % props.ids.length];
   else if (event.key === 'Home') target = props.ids[0];
   else if (event.key === 'End') target = props.ids.at(-1);
-  else if (event.key === 'Delete') { event.preventDefault(); emit('close', id); void revealSelected(true); return; }
+  else if (event.key === 'Delete') { event.preventDefault(); emit('close', id); return; }
   if (!target) return;
   event.preventDefault();
   if (event.altKey) emit('move', id, target);
@@ -83,7 +83,7 @@ defineExpose({ openAll, closePicker: () => picker.value?.close() });
           <ChatStatus :attention="activity[thread.id]?.attention" :unread="activity[thread.id]?.unread" :running="isThreadRunning(thread)" :status="thread.status" :completed="thread.settledOverride === 'settled' || activity[thread.id]?.completed" />
           <span class="tab-label"><strong>{{ thread.title }}</strong><small>{{ name(thread) }}<span v-if="worktree(thread)"> · {{ worktree(thread) }}</span></small></span>
         </button>
-        <button class="tab-close icon-button" :aria-label="`Close ${thread.title} tab`" title="Close tab" :disabled="disabled" @click="emit('close', thread.id); revealSelected(true)"><X :size="13" /></button>
+        <button class="tab-close icon-button" :aria-label="`Close ${thread.title} tab`" title="Close tab" :disabled="disabled" @click="emit('close', thread.id)"><X :size="13" /></button>
       </div>
       <span v-if="!tabs.length" class="empty-tabs">Open a chat to get started</span>
     </div>
@@ -113,7 +113,7 @@ defineExpose({ openAll, closePicker: () => picker.value?.close() });
   </nav>
 </template>
 <style scoped>
-.chat-tabs { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); background: #151923; }
+.chat-tabs { display: flex; align-items: center; gap: 6px; min-width: 0; height: var(--pane-heading-height); min-height: var(--pane-heading-height); flex-shrink: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); background: #151923; }
 .chat-tab-strip { display: flex; gap: 5px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .chat-tab { display: flex; flex: 0 0 auto; max-width: 360px; border: 1px solid var(--line); border-radius: 7px; background: #1b202b; }
 .chat-tab.selected { background: #2a3348; border-color: #657ba8; }

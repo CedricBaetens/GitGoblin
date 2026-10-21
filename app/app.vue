@@ -318,8 +318,20 @@ function selectChat(id: string) {
 function receiveChatSelection(id: string) {
   if (id) chatTabs.value = openChatTab(chatTabs.value, id);
 }
+const closingChat = ref<T3Thread>();
 function closeChat(id: string) {
-  if (!busy.value) chatTabs.value = closeChatTab(chatTabs.value, id);
+  if (busy.value || closingChat.value || !chatTabs.value.ids.includes(id)) return;
+  chatNavigation.value?.closePicker();
+  closingChat.value = threads.value.find(thread => thread.id === id);
+}
+async function confirmCloseChat(settle: boolean) {
+  const thread = closingChat.value;
+  if (!thread) return;
+  if (settle) {
+    if (!t3Connected.value || !chat.value) throw new Error('Reconnect T3 Code to settle this conversation, or turn off settling to close only the tab.');
+    await chat.value.settle(thread.id);
+  }
+  chatTabs.value = closeChatTab(chatTabs.value, thread.id);
 }
 function chatActions(thread: T3Thread): SidebarItem[] {
   return [
@@ -963,6 +975,7 @@ onUnmounted(() => {
         :aria-valuenow="sidebarWidth" :aria-valuemin="minSidebarWidth" :aria-valuemax="maxSidebarWidth(sidebarRoom)"
         title="Drag to resize; double-click to reset. Arrow keys also resize."
         @pointerdown="startSidebarResize" @pointermove="moveSidebarResize" @pointerup="stopSidebarResize" @pointercancel="stopSidebarResize" @lostpointercapture="stopSidebarResize" @keydown="sidebarResizeKey" @dblclick="resetSidebarWidth" />
+      <div class="sidebar-heading">
       <nav class="workspace-modes" aria-label="Workspace mode">
         <button :aria-pressed="!chatVisible" @click="workspaceMode = 'git'"><GitBranch :size="16" />Git</button>
         <button :aria-pressed="chatVisible" @click="workspaceMode = 'chat'">
@@ -971,6 +984,11 @@ onUnmounted(() => {
           <span v-else-if="!chatVisible && allActiveAgents.length" class="mode-running" role="status" :aria-label="`${allActiveAgents.length} agent tasks running`" :title="`${allActiveAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
         </button>
       </nav>
+      <div v-if="chatVisible && selectedChatWorktree" class="chat-worktree-label" :title="selectedChatWorktree">
+        <FolderGit2 :size="12" />
+        <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
+      </div>
+      </div>
       <div v-show="!chatVisible" class="repository-picker">
         <FolderGit2 :size="19" />
         <div>
@@ -979,10 +997,6 @@ onUnmounted(() => {
             snapshot ? "Local repository" : "Choose a workspace"
           }}</span>
         </div>
-      </div>
-      <div v-if="chatVisible && selectedChatWorktree" class="chat-worktree-label" :title="selectedChatWorktree">
-        <FolderGit2 :size="12" />
-        <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
       </div>
       <div v-show="!chatVisible" ref="sidebarScroll" class="sidebar-scroll">
         <template v-if="snapshot">
@@ -1455,31 +1469,16 @@ onUnmounted(() => {
         </div>
         <div v-if="error" class="inline-error">{{ error }}</div>
       </div>
-      <footer class="statusbar">
-        <span
-          ><span class="status-dot" :class="{ live: !!snapshot }" />{{
-            busy
-              ? "Working…"
-              : example
-                ? "Example data"
-                : snapshot
-                  ? "Watching for changes"
-                  : "Ready"
-          }}</span
-        ><span v-if="notice" :title="notice" class="status-notice">{{
-          notice
-        }}</span
-        ><span v-else-if="snapshot" class="status-notice">{{
-          activeAgents.length
-            ? `${activeAgents.length} active agent task(s)`
-            : "All Git operations stay on your machine"
-        }}</span
-        ><span>UTF-8</span
-        ><span>{{ desktop() ? "Desktop" : "Browser preview" }}</span>
-      </footer>
+      <div v-if="busy || notice" class="workspace-status" role="status">
+        <LoaderCircle v-if="busy" :size="14" class="spin" />
+        <Check v-else :size="14" />
+        <span>{{ notice || 'Working…' }}</span>
+        <button v-if="notice && !busy" class="icon-button" aria-label="Dismiss status message" @click="notice = ''"><X :size="14" /></button>
+      </div>
     </main>
     <ContextMenu ref="sidebarMenu" @error="error = $event" />
     <Teleport to="body">
+      <CloseChatDialog v-if="closingChat" :thread="closingChat" :connected="t3Connected && !example" :confirm="confirmCloseChat" @close="closingChat = undefined" />
       <div v-if="renamePath" class="modal-backdrop" @click.self="!w.nameSaving.value && (renamePath = '')" @keydown.esc="!w.nameSaving.value && (renamePath = '')">
         <form class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-repository-title" @submit.prevent="saveRepositoryName">
           <div class="modal-heading"><h2 id="rename-repository-title">Rename repository</h2><button type="button" class="icon-button" aria-label="Close rename dialog" :disabled="w.nameSaving.value" @click="renamePath = ''"><X :size="18" /></button></div>

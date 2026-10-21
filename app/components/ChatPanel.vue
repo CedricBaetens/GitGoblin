@@ -17,6 +17,7 @@ import {
   Code2,
   Bug,
   GitBranch,
+  FolderGit2,
 } from "lucide-vue-next";
 import { conversationTurns } from '~/lib/conversation-turns';
 import { imageMimeTypes, uploadChatImage, validateChatImages } from '~/lib/chat-images';
@@ -73,7 +74,7 @@ function selectTicket(ticket: ConversationTicket) {
   selectedTicket.value = ticket;
 }
 const needsTicket = computed(() => 'ticket' in newPreset.value);
-const useNewWorktree = ref(false);
+const useNewWorktree = ref(true);
 const newChatError = ref("");
 const canCreate = computed(() => connected.value && !creating.value && !!newProject.value && !!newModel.value && !!newWorktree.value.trim() && (!needsTicket.value || !!newTicket.value.trim()));
 const presetIcons = [MessageSquare, Search, Code2, Bug, ShieldCheck];
@@ -312,13 +313,12 @@ async function stop() {
   }
 }
 async function settle(id: string) {
-  if (!connected.value || props.example || sending.value || settlingId.value) return;
+  if (!connected.value || props.example) throw new Error('Connect T3 Code to settle this conversation.');
+  if (sending.value || settlingId.value) throw new Error('Wait for the current conversation action to finish, then try again.');
   settlingId.value = id;
   error.value = "";
   try {
     await client.settle(id);
-  } catch (e) {
-    error.value = String(e);
   } finally {
     settlingId.value = "";
   }
@@ -405,12 +405,14 @@ function newChat(trigger?: HTMLButtonElement) {
   newPreset.value = conversationPresets[0];
   newTicket.value = "";
   selectedTicket.value = undefined;
-  useNewWorktree.value = false;
+  useNewWorktree.value = true;
   newChatError.value = "";
   showNew.value = true;
   void nextTick(() => newConversationDialog.value?.querySelector<HTMLButtonElement>('.conversation-preset')?.focus());
 }
-function changeNewProject() {
+function changeNewProject(id: string) {
+  if (newProject.value === id) return;
+  newProject.value = id;
   newTicket.value = "";
   selectedTicket.value = undefined;
   const project = projects.value.find(project => project.id === newProject.value);
@@ -661,7 +663,7 @@ defineExpose({
           type="button"
           :disabled="sending || !!settlingId"
           title="Mark this conversation as settled and remove it from the active list"
-          @click="settle(thread.id)"
+          @click="settle(thread.id).catch(e => error = String(e))"
         >
           <LoaderCircle v-if="settlingId === thread.id" :size="13" class="spin" />
           <Check v-else :size="13" /> Settle conversation
@@ -740,7 +742,23 @@ defineExpose({
             <h2 id="new-conversation-title">New conversation</h2>
             <button type="button" class="icon-button" aria-label="Close new conversation" :disabled="creating" @click="dismissNewDialog"><X :size="18" /></button>
           </div>
-          <p id="new-conversation-description">Choose an action to start when you create the conversation. Blank opens an empty chat.</p>
+          <p id="new-conversation-description">Choose a project and a starting action for your conversation.</p>
+          <div class="conversation-setup">
+          <section class="conversation-section" aria-labelledby="conversation-project-heading">
+            <h3 id="conversation-project-heading">Project <span>Where you’ll work</span></h3>
+            <div class="conversation-projects" role="group" aria-label="Project">
+              <button v-for="project in projects" :key="project.id" type="button" class="conversation-preset project-choice"
+                :aria-pressed="newProject === project.id" :disabled="creating"
+                @click="changeNewProject(project.id)">
+                <FolderGit2 :size="19" />
+                <span><strong>{{ project.title || project.name || project.workspaceRoot.replaceAll('\\', '/').split('/').filter(Boolean).pop() || project.workspaceRoot }}</strong><small>{{ project.workspaceRoot }}</small></span>
+                <Check v-if="newProject === project.id" :size="15" class="preset-check" />
+              </button>
+            </div>
+            <p v-if="!projects.length" class="conversation-hint">Add a project in T3 Code to get started.</p>
+          </section>
+          <section class="conversation-section" aria-labelledby="conversation-action-heading">
+            <h3 id="conversation-action-heading">Starting action <span>What you’ll do</span></h3>
           <div class="conversation-actions" role="group" aria-label="Conversation action">
             <button v-for="(preset, index) in conversationPresets" :key="preset.label" type="button" class="conversation-preset"
               :aria-label="preset.label" :aria-pressed="newPreset.label === preset.label" :disabled="creating" @click="newPreset = preset">
@@ -749,24 +767,29 @@ defineExpose({
               <Check v-if="newPreset.label === preset.label" :size="15" class="preset-check" />
             </button>
           </div>
+          </section>
           <template v-if="needsTicket">
             <DevopsTickets :repo="newWorktree" :selected="newTicket" :disabled="creating" @select="selectTicket" />
             <label>Ticket URL, number, or description<textarea v-model="newTicket" :disabled="creating" rows="2" required placeholder="Select a ticket above, or enter a URL, #123, or description" /></label>
           </template>
-          <div class="conversation-options">
-            <label>Project<select v-model="newProject" :disabled="creating" @change="changeNewProject">
-              <option disabled value="">Choose a project</option>
-              <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title || p.name || p.workspaceRoot }} · {{ p.workspaceRoot }}</option>
-            </select></label>
-            <label>Model<select v-model="newModel" :disabled="creating">
+          <section class="conversation-section" aria-labelledby="conversation-workspace-heading">
+            <h3 id="conversation-workspace-heading">Workspace</h3>
+            <label class="worktree-toggle" :class="{ enabled: useNewWorktree }">
+              <GitBranch :size="19" />
+              <span class="worktree-toggle-copy"><strong>Use new worktree</strong><small id="new-worktree-description">{{ useNewWorktree ? 'Create a separate branch and worktree for this conversation.' : 'Work directly in the existing path below. Changes are shared.' }}</small></span>
+              <input v-model="useNewWorktree" type="checkbox" role="switch" aria-label="Use new worktree" aria-describedby="new-worktree-description" :disabled="creating" />
+              <span class="worktree-switch" aria-hidden="true" />
+            </label>
+            <label>{{ useNewWorktree ? 'Create from' : 'Existing worktree' }}<input v-model="newWorktree" :disabled="creating" placeholder="Worktree path" required /></label>
+            <p class="conversation-hint">{{ useNewWorktree ? 'A new worktree will be created from HEAD at this path.' : 'This conversation will use this path without creating a worktree.' }}</p>
+          </section>
+          <label>Model<select v-model="newModel" :disabled="creating">
               <option v-for="option in modelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select></label>
-          </div>
           <p v-if="!modelOptions.length">Configure a model in T3 Code first.</p>
           <p v-if="!connected">Reconnect T3 Code to create a conversation.</p>
-          <label>Worktree<input v-model="newWorktree" :disabled="creating" placeholder="Worktree path" /></label>
-          <label class="force-option new-worktree-option"><input v-model="useNewWorktree" type="checkbox" :disabled="creating" /><GitBranch :size="15" />Use new worktree</label>
           <div v-if="newChatError" class="inline-error" role="alert">{{ newChatError }}</div>
+          </div>
           <div class="modal-footer">
             <button type="button" :disabled="creating" @click="dismissNewDialog">Cancel</button>
             <button type="submit" class="primary" :disabled="!canCreate"><LoaderCircle v-if="creating" :size="14" class="spin" />{{ creating ? 'Creating…' : 'Create conversation' }}</button>
@@ -800,19 +823,40 @@ defineExpose({
 .conversation-body .message p { font-size: 13px; line-height: 1.7; color: #d4d7df; }
 .composer textarea { font-size: 13px; line-height: 1.6; }
 
-.new-conversation-dialog { width: 680px; }
+.new-conversation-dialog { width: 680px; display: flex; flex-direction: column; overflow: hidden; }
+.new-conversation-dialog > .modal-heading, .new-conversation-dialog > p, .new-conversation-dialog > .modal-footer { flex-shrink: 0; }
+.conversation-setup { min-height: 0; overflow-y: auto; padding: 3px 4px; margin: -3px -4px; scrollbar-width: thin; }
 .new-conversation-dialog textarea { width: 100%; font-size: 12px; }
 .conversation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.conversation-preset { min-height: 76px; display: flex; align-items: flex-start; gap: 11px; padding: 15px; text-align: left; border: 1px solid #35405a; background: #171c26; }
+.conversation-section { margin-top: 20px; }
+.conversation-section:first-child { margin-top: 0; }
+.conversation-section h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; font-size: 12px; font-weight: 600; }
+.conversation-section h3 > span { color: #8998b4; font-size: 11px; font-weight: 400; }
+.conversation-projects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; max-height: 190px; overflow-y: auto; }
+.conversation-preset { min-width: 0; min-height: 70px; display: flex; align-items: flex-start; gap: 11px; padding: 12px; text-align: left; white-space: normal; border: 1px solid #35405a; background: #171c26; border-radius: 8px; }
+.conversation-preset:hover:not(:disabled) { border-color: #64789f; background: #222b3c; }
+.conversation-preset:focus-visible, .worktree-toggle:has(input:focus-visible) { outline: 2px solid #a7b6ff; outline-offset: 3px; }
 .conversation-preset[aria-pressed="true"] { border-color: #8ca5e7; background: #27334b; }
 .conversation-preset > svg { flex-shrink: 0; margin-top: 2px; color: #a8bbeb; }
-.conversation-preset span { display: grid; gap: 6px; flex: 1; }
+.conversation-preset span { display: grid; gap: 5px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .conversation-preset strong { font-size: 13px; font-weight: 600; }
 .conversation-preset small { color: #9eadc8; font-size: 11px; line-height: 1.5; }
-.conversation-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.conversation-options select, .conversation-options input { min-width: 0; }
-.modal .new-worktree-option { gap: 8px; }
-@media (max-width: 540px) { .conversation-actions, .conversation-options { grid-template-columns: 1fr; } }
+.project-choice small { font-family: Consolas, monospace; font-size: 10px; }
+.modal .worktree-toggle { position: relative; display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 14px; margin: 0; border: 1px solid #35405a; border-radius: 8px; background: #171c26; cursor: pointer; }
+.worktree-toggle.enabled { border-color: #647db3; background: #222d43; }
+.worktree-toggle > svg { flex-shrink: 0; color: #a8bbeb; }
+.worktree-toggle-copy { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.worktree-toggle-copy strong { color: #d9dce5; font-size: 13px; font-weight: 600; }
+.worktree-toggle-copy small { font-size: 11px; line-height: 1.5; }
+.modal .worktree-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.worktree-switch { width: 34px; height: 20px; padding: 3px; flex-shrink: 0; border-radius: 12px; background: #4a5367; }
+.worktree-switch::after { content: ''; display: block; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.worktree-toggle input:checked + .worktree-switch { background: #a7b6ff; }
+.worktree-toggle input:checked + .worktree-switch::after { transform: translateX(14px); background: #1b2340; }
+.worktree-toggle:has(input:disabled) { opacity: .5; cursor: default; }
+.conversation-hint { margin: 7px 0 0; font-size: 11px; line-height: 1.5; color: #8998b4; }
+.conversation-section > label:has(+ .conversation-hint) { margin-bottom: 0; }
+@media (max-width: 540px) { .conversation-actions, .conversation-projects { grid-template-columns: 1fr; } }
 .agent-status { display: flex; align-items: center; gap: 7px; min-height: 26px; margin-bottom: 5px; color: #9baed4; font-size: 11px; }
 .work-details { margin: 8px 0 12px; color: #8e9bb4; }
 .work-details summary { display: flex; align-items: center; gap: 5px; width: fit-content; padding: 8px 0; cursor: pointer; font-size: 12px; list-style: none; }
