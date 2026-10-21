@@ -65,6 +65,16 @@ const newProject = ref(""),
   newWorktree = ref(""),
   newModel = ref("");
 const creating = ref(false);
+const projectPickerOpen = ref(false), projectSearch = ref('');
+const projectPickerButton = ref<HTMLButtonElement>();
+const selectedProject = computed(() => projects.value.find(project => project.id === newProject.value));
+const matchingProjects = computed(() => {
+  const query = projectSearch.value.trim().toLowerCase();
+  return projects.value.filter(project => `${project.title || project.name || ''} ${project.workspaceRoot}`.toLowerCase().includes(query));
+});
+function projectLabel(project: T3Project) {
+  return project.title || project.name || project.workspaceRoot.replaceAll('\\', '/').split('/').filter(Boolean).pop() || project.workspaceRoot;
+}
 const settlingId = ref("");
 const newConversationDialog = ref<HTMLElement>();
 const newConversationButton = ref<HTMLButtonElement>();
@@ -433,6 +443,8 @@ function newChat(trigger?: HTMLButtonElement) {
   if (!connected.value) { showPairing.value = true; return; }
   const defaults = conversationDefaults(props.repo, projects.value, thread.value);
   newProject.value = defaults.projectId;
+  projectPickerOpen.value = !defaults.projectId;
+  projectSearch.value = '';
   newWorktree.value = defaults.worktreePath;
   newModel.value = preferredChatModel(modelOptions.value, defaults.modelSelection);
   modelSettings.value = modelSettingDefaults(selectedModel.value?.settings || []);
@@ -446,6 +458,9 @@ function newChat(trigger?: HTMLButtonElement) {
   void nextTick(() => newConversationDialog.value?.querySelector<HTMLButtonElement>('.conversation-preset')?.focus());
 }
 function changeNewProject(id: string) {
+  projectPickerOpen.value = false;
+  projectSearch.value = '';
+  void nextTick(() => projectPickerButton.value?.focus());
   if (newProject.value === id) return;
   newProject.value = id;
   newTicket.value = "";
@@ -788,14 +803,24 @@ defineExpose({
           <div class="conversation-setup">
           <section class="conversation-section" aria-labelledby="conversation-project-heading">
             <h3 id="conversation-project-heading">Project <span>Where you’ll work</span></h3>
-            <div class="conversation-projects" role="group" aria-label="Project">
-              <button v-for="project in projects" :key="project.id" type="button" class="conversation-preset project-choice"
+            <button ref="projectPickerButton" type="button" class="conversation-preset project-choice project-current" :disabled="creating"
+              :aria-expanded="projectPickerOpen" aria-controls="conversation-project-picker" @click="projectPickerOpen = !projectPickerOpen">
+              <FolderGit2 :size="19" />
+              <span><strong>{{ selectedProject ? projectLabel(selectedProject) : 'Choose a project' }}</strong><small>{{ selectedProject?.workspaceRoot || `${projects.length} projects available` }}</small></span>
+              <ChevronRight :size="16" :class="{ 'project-expanded': projectPickerOpen }" />
+            </button>
+            <div v-if="projectPickerOpen" id="conversation-project-picker" class="project-picker">
+              <input v-model="projectSearch" type="search" aria-label="Search projects" placeholder="Search projects by name or path…" :disabled="creating" />
+              <div class="conversation-projects" role="group" aria-label="Available projects">
+              <button v-for="project in matchingProjects" :key="project.id" type="button" class="conversation-preset project-choice"
                 :aria-pressed="newProject === project.id" :disabled="creating"
                 @click="changeNewProject(project.id)">
                 <FolderGit2 :size="19" />
-                <span><strong>{{ project.title || project.name || project.workspaceRoot.replaceAll('\\', '/').split('/').filter(Boolean).pop() || project.workspaceRoot }}</strong><small>{{ project.workspaceRoot }}</small></span>
+                <span><strong>{{ projectLabel(project) }}</strong><small>{{ project.workspaceRoot }}</small></span>
                 <Check v-if="newProject === project.id" :size="15" class="preset-check" />
               </button>
+              </div>
+              <p v-if="projects.length && !matchingProjects.length" class="conversation-hint">No projects match “{{ projectSearch }}”.</p>
             </div>
             <p v-if="!projects.length" class="conversation-hint">Add a project in T3 Code to get started.</p>
           </section>
@@ -902,8 +927,14 @@ defineExpose({
 .model-reasoning button[aria-pressed="true"] { color: #e3e9ff; border-color: #8ca5e7; background: #27334b; }
 .conversation-section h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; font-size: 12px; font-weight: 600; }
 .conversation-section h3 > span { color: #8998b4; font-size: 11px; font-weight: 400; }
-.conversation-projects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; max-height: 190px; overflow-y: auto; }
-.conversation-preset { min-width: 0; min-height: 70px; display: flex; align-items: flex-start; gap: 11px; padding: 12px; text-align: left; white-space: normal; border: 1px solid #35405a; background: #171c26; border-radius: 8px; }
+.conversation-projects { display: grid; gap: 5px; max-height: 220px; overflow-y: auto; padding: 3px; scrollbar-width: thin; }
+.project-current { width: 100%; align-items: center; border-color: #647db3; }
+.project-current > svg:last-child { transition: transform .15s; }
+.project-expanded { transform: rotate(90deg); }
+.project-picker { margin-top: 8px; padding: 8px; border: 1px solid #35405a; border-radius: 8px; background: #141923; }
+.project-picker input { width: 100%; margin-bottom: 8px; }
+.project-picker .project-choice { padding: 9px 10px; }
+.conversation-preset { min-width: 0; display: flex; align-items: flex-start; gap: 11px; padding: 12px; text-align: left; white-space: normal; border: 1px solid #35405a; background: #171c26; border-radius: 8px; }
 .conversation-preset:hover:not(:disabled) { border-color: #64789f; background: #222b3c; }
 .conversation-preset:focus-visible, .worktree-toggle:has(input:focus-visible) { outline: 2px solid #a7b6ff; outline-offset: 3px; }
 .conversation-preset[aria-pressed="true"] { border-color: #8ca5e7; background: #27334b; }

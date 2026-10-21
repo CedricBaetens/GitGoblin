@@ -219,9 +219,20 @@ export class T3Client {
             )
               throw new Error("Unsupported T3 shell snapshot.");
             clearTimeout(this.readyTimeout);
-            this.projects = item.snapshot.projects;
+            // Repository identity refreshes contain only enriched projects, not a full shell.
+            const partial = Array.isArray(item.resolvedRepositoryIdentityRoots);
+            if (partial) {
+              const updates = new Map<string, T3Project>(item.snapshot.projects.map((project: T3Project) => [project.id, project]));
+              this.projects = this.projects.map(project => {
+                const updated = updates.get(project.id);
+                updates.delete(project.id);
+                return updated || project;
+              }).concat([...updates.values()]);
+            } else {
+              this.projects = item.snapshot.projects;
+              this.threads = item.snapshot.threads.map(normalizeThread);
+            }
             this.legacyProtocol = "snapshotSequence" in item.snapshot && !("schemaVersion" in item.snapshot);
-            this.threads = item.snapshot.threads.map(normalizeThread);
             this.status = "connected";
             this.failures = 0;
           } else if ((item.kind === "thread.updated" || item.kind === "thread-upserted")) {

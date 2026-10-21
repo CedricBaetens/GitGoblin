@@ -37,6 +37,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it('preserves projects and threads on partial repository identity refreshes', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const receive = (item: unknown) => socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [item] });
+    const first = { id: 'first', workspaceRoot: 'D:/first' };
+    const second = { id: 'second', workspaceRoot: 'D:/second' };
+    const thread = { id: 'chat', projectId: 'second' };
+    receive({ kind: 'snapshot', snapshot: { schemaVersion: 2, projects: [first, second], threads: [thread] } });
+    receive({ kind: 'snapshot', resolvedRepositoryIdentityRoots: ['D:/first'],
+      snapshot: { schemaVersion: 2, projects: [{ ...first, title: 'Updated' }], threads: [] } });
+    expect(client.projects).toEqual([{ ...first, title: 'Updated' }, second]);
+    expect(client.threads).toEqual([thread]);
+    receive({ kind: 'snapshot', snapshot: { schemaVersion: 2, projects: [second], threads: [] } });
+    expect(client.projects).toEqual([second]);
+    expect(client.threads).toEqual([]);
+  });
   it.each([false, true])('switches an idle chat worktree through T3 (legacy=%s)', async legacy => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);
