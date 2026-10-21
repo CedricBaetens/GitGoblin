@@ -18,10 +18,19 @@ export function availableSkills(provider: { skills?: T3Skill[]; workspaceSnapsho
 }
 
 export function searchSkills(skills: T3Skill[], query: string) {
-  const value = query.toLowerCase();
-  return skills.filter(skill => [skill.name, skill.displayName, skill.shortDescription, skill.description]
-    .some(text => text?.toLowerCase().includes(value)))
-    .sort((a, b) => Number(b.name.toLowerCase().startsWith(value)) - Number(a.name.toLowerCase().startsWith(value)));
+  const value = query.trim().toLowerCase();
+  const rank = (skill: T3Skill) => {
+    const names = [skill.name, skill.name.split(':').at(-1), skill.displayName]
+      .filter((name): name is string => !!name).map(name => name.toLowerCase());
+    if (names.some(name => name === value)) return 0;
+    if (names.some(name => name.startsWith(value))) return 1;
+    if (names.some(name => name.includes(value))) return 2;
+    if ([skill.shortDescription, skill.description].some(text => text?.toLowerCase().includes(value))) return 3;
+    return 4;
+  };
+  return skills.map(skill => ({ skill, rank: rank(skill) })).filter(item => item.rank < 4)
+    .sort((a, b) => a.rank - b.rank || a.skill.name.localeCompare(b.skill.name))
+    .map(item => item.skill);
 }
 
 export function insertSkill(text: string, trigger: { start: number; end: number }, name: string) {

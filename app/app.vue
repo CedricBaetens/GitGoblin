@@ -41,6 +41,7 @@ import {
 } from "lucide-vue-next";
 import { useWorkbench } from "~/composables/useWorkbench";
 import { branchTree } from "~/lib/branches";
+import { chatHistory, closeChatTab, moveChatTab, openChatTab, restoreChatTabs } from "~/lib/chat-tabs";
 import { isThreadRunning, visibleThreads } from "~/lib/threads";
 import { desktop, invoke } from "~/lib/native";
 import { clampSidebarWidth, defaultSidebarWidth, maxSidebarWidth, minSidebarWidth, sidebarKeyboardWidth } from '~/lib/sidebar';
@@ -188,13 +189,6 @@ function worktreeMenu(event: MouseEvent | KeyboardEvent, path: string) {
   ]);
 }
 
-function conversationMenu(event: MouseEvent | KeyboardEvent, thread: T3Thread) {
-  sidebarMenu.value?.open(event, [
-    { label: 'Open conversation', disabled: busy.value, run: () => { chatVisible.value = true; chat.value?.select(thread.id); } },
-    { label: 'Settle conversation', disabled: !t3Connected.value || example.value, run: () => { chatVisible.value = true; return chat.value?.settle(thread.id); } },
-    { ...copyItem('Copy conversation title', thread.title), separatorBefore: true }, copyItem('Copy conversation ID', thread.id),
-  ]);
-}
 function tagMenu(event: MouseEvent | KeyboardEvent, tag: GitRef) {
   const name = tag.name.replace('refs/tags/', '');
   sidebarMenu.value?.open(event, [
@@ -259,7 +253,7 @@ watch(workspaceMode, async (mode, previous) => {
 });
 const chatNeedsAttention = ref(false);
 const context = ref(""),
-  chat = ref<{ select: (id: string) => void; settle: (id: string) => Promise<void>; newConversation: (trigger?: HTMLButtonElement) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
+  chat = ref<{ settle: (id: string) => Promise<void>; newConversation: (trigger?: HTMLButtonElement) => void; stopAll: () => Promise<void>; focusComposer: () => void }>(),
   menu = ref(false);
 const commitMessages = ref<Record<string, string>>({});
 const commitMessage = computed({
@@ -283,9 +277,56 @@ function toggleTopMenu(element: HTMLDivElement | undefined, event: MouseEvent) {
   element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
 }
 const threads = ref<T3Thread[]>([]),
-  selectedThreadId = ref(''),
   projects = ref<T3Project[]>([]),
   t3Connected = ref(false);
+const chatTabs = ref(restoreChatTabs(null));
+const selectedThreadId = computed(() => chatTabs.value.selected);
+const chatNavigation = ref<{ openAll: (openOnly?: boolean) => void; closePicker: () => void }>();
+const chatActivityStates = ref<Record<string, { attention: boolean; response: string }>>({});
+const seenResponses = ref<Record<string, string>>({});
+let tabsInitialized = false;
+let hadSavedTabs = false;
+const chatIndicators = computed(() => Object.fromEntries(Object.entries(chatActivityStates.value).map(([id, activity]) =>
+  [id, { attention: activity.attention, unread: !!activity.response && seenResponses.value[id] !== activity.response, completed: !!activity.response }])));
+function persistChatTabs() {
+  try {
+    localStorage.setItem('gitgoblin.chatTabs', JSON.stringify(chatTabs.value));
+    localStorage.setItem('gitgoblin.seenChatResponses', JSON.stringify(seenResponses.value));
+  } catch { /* Tabs remain usable without storage. */ }
+}
+watch(chatTabs, persistChatTabs, { deep: true });
+watch(selectedThreadId, () => { context.value = ''; });
+watch([selectedThreadId, chatVisible, chatActivityStates], () => {
+  const id = selectedThreadId.value, activity = chatActivityStates.value[id];
+  if (chatVisible.value && activity?.response && seenResponses.value[id] !== activity.response) { seenResponses.value[id] = activity.response; persistChatTabs(); }
+});
+function selectChat(id: string) {
+  if (busy.value) return;
+  chatNavigation.value?.closePicker();
+  chatVisible.value = true;
+  if (selectedThreadId.value === id) {
+    const thread = threads.value.find(thread => thread.id === id);
+    const path = thread?.worktreePath || projects.value.find(project => project.id === thread?.projectId)?.workspaceRoot;
+    if (path && normalized(path) !== normalized(repo.value)) void openThreadWorktree(path, id);
+  }
+  chatTabs.value = openChatTab(chatTabs.value, id);
+}
+function receiveChatSelection(id: string) {
+  if (id) chatTabs.value = openChatTab(chatTabs.value, id);
+}
+function closeChat(id: string) {
+  if (!busy.value) chatTabs.value = closeChatTab(chatTabs.value, id);
+}
+function chatActions(thread: T3Thread): SidebarItem[] {
+  return [
+    { label: 'Open conversation', disabled: busy.value || example.value, run: () => selectChat(thread.id) },
+    { label: 'Close tab', disabled: busy.value || !chatTabs.value.ids.includes(thread.id), run: () => closeChat(thread.id) },
+    { label: 'Settle conversation', separatorBefore: true, disabled: !t3Connected.value || example.value || thread.settledOverride === 'settled' || !!thread.archivedAt,
+      run: () => chat.value?.settle(thread.id) },
+    { ...copyItem('Copy conversation title', thread.title), separatorBefore: true },
+    copyItem('Copy conversation ID', thread.id),
+  ];
+}
 const normalized = (value: string) =>
   value.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
 const repoName = computed(
@@ -316,10 +357,8 @@ const repoThreads = computed(() =>
       ) === normalized(repo.value),
   ),
 );
-const visibleRepoThreads = computed(() => visibleThreads(repoThreads.value));
-const activeAgents = computed(() =>
-  repoThreads.value.filter(isThreadRunning),
-);
+const activeAgents = computed(() => repoThreads.value.filter(isThreadRunning));
+const allActiveAgents = computed(() => threads.value.filter(thread => !thread.deletedAt && isThreadRunning(thread)));
 const additions = computed(
   () =>
     diff.value.text
@@ -346,7 +385,6 @@ function selectFile(path: string, group: string) {
 const sections = ref<Record<string, boolean>>({
   branches: true,
   worktrees: true,
-  chats: true,
   remotes: false,
   tags: false,
   stashes: false,
@@ -663,9 +701,23 @@ async function editContext(text: string) {
   chat.value?.focusComposer();
 }
 function receiveThreads(ts: T3Thread[], ps: T3Project[], connected: boolean) {
+  const previous = threads.value;
   threads.value = ts;
   projects.value = ps;
   t3Connected.value = connected;
+  if (!connected) return;
+  const restoring = !tabsInitialized;
+  if (restoring) {
+    tabsInitialized = true;
+    if (!hadSavedTabs) {
+      const first = visibleThreads(repoThreads.value)[0] || chatHistory(ts)[0];
+      if (first) chatTabs.value = openChatTab(chatTabs.value, first.id);
+    }
+  }
+  for (const id of [...chatTabs.value.ids]) {
+    const thread = ts.find(thread => thread.id === id);
+    if (thread?.deletedAt || (!thread && (restoring || previous.some(thread => thread.id === id)))) chatTabs.value = closeChatTab(chatTabs.value, id);
+  }
 }
 let currentChat = "";
 const chatViews = new Map<
@@ -683,6 +735,7 @@ async function openThreadWorktree(path: string, threadId: string) {
         document.querySelector(".review-panel .diff-scroll")?.scrollTop || 0,
     });
   if (normalized(path) !== normalized(repo.value)) await w.openRepo(path);
+  if (normalized(path) !== normalized(repo.value) || selectedThreadId.value !== threadId) return;
   currentChat = threadId;
   const saved = chatViews.get(threadId);
   if (saved) {
@@ -734,6 +787,7 @@ async function openEditor() {
 async function chooseRepository(path?: string) {
   fileMenu.value?.hidePopover();
   repositoryMenu.value?.hidePopover();
+  workspaceMode.value = 'git';
   if (path && snapshot.value && normalized(path) === normalized(repo.value)) return;
   try {
     await w.openRepo(path);
@@ -765,6 +819,15 @@ function keydown(event: KeyboardEvent) {
 }
 const preventBrowserMenu = (event: Event) => event.preventDefault();
 onMounted(() => {
+  try {
+    const savedTabs = localStorage.getItem('gitgoblin.chatTabs');
+    hadSavedTabs = savedTabs !== null;
+    chatTabs.value = restoreChatTabs(JSON.parse(savedTabs || 'null'));
+    const saved = JSON.parse(localStorage.getItem('gitgoblin.seenChatResponses') || '{}');
+    if (saved && typeof saved === 'object' && !Array.isArray(saved))
+      seenResponses.value = Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch { /* Invalid saved tabs do not prevent startup. */ }
+
   window.addEventListener("keydown", keydown);
   document.addEventListener('contextmenu', preventBrowserMenu, true);
   window.addEventListener('resize', updateSidebarViewport);
@@ -900,8 +963,8 @@ onUnmounted(() => {
         <button :aria-pressed="!chatVisible" @click="workspaceMode = 'git'"><GitBranch :size="16" />Git</button>
         <button :aria-pressed="chatVisible" @click="workspaceMode = 'chat'">
           <MessageSquare :size="16" />Chat
-          <span v-if="!chatVisible && chatNeedsAttention" class="mode-attention" role="status" aria-label="Chat needs your attention" title="Chat needs your attention"><AlertTriangle :size="13" /></span>
-          <span v-else-if="!chatVisible && activeAgents.length" class="mode-running" role="status" :aria-label="`${activeAgents.length} agent tasks running`" :title="`${activeAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
+          <span v-if="!chatVisible && (chatNeedsAttention || Object.values(chatIndicators).some(state => state.attention || state.unread))" class="mode-attention" role="status" aria-label="Chat needs your attention" title="Chat needs your attention"><AlertTriangle :size="13" /></span>
+          <span v-else-if="!chatVisible && allActiveAgents.length" class="mode-running" role="status" :aria-label="`${allActiveAgents.length} agent tasks running`" :title="`${allActiveAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
         </button>
       </nav>
       <div v-show="!chatVisible" class="repository-picker">
@@ -920,7 +983,11 @@ onUnmounted(() => {
           <option v-for="tree in snapshot.worktrees" :key="tree.path" :value="tree.path">{{ tree.branch || 'Detached HEAD' }} · {{ tree.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</option>
         </select>
       </label>
-      <div ref="sidebarScroll" class="sidebar-scroll">
+      <div v-show="chatVisible" class="chat-navigation-bar">
+        <button aria-haspopup="dialog" @click="chatNavigation?.openAll()"><MessageSquare :size="14" />All chats</button>
+        <button class="icon-button" aria-label="New sidebar chat" title="New chat" :disabled="example || busy" @click="openNewConversation"><Plus :size="16" /></button>
+      </div>
+      <div v-show="!chatVisible" ref="sidebarScroll" class="sidebar-scroll">
         <template v-if="snapshot">
           <nav v-show="!chatVisible" class="main-nav">
             <button
@@ -989,57 +1056,6 @@ onUnmounted(() => {
               ><button v-show="!chatVisible" class="tree-row subdued" @click="ask('worktree-add')">
                 <Plus :size="13" />New worktree
               </button></template
-            >
-          </div>
-          <div v-show="chatVisible" class="nav-section">
-            <div class="conversation-navigation">
-            <button
-              class="section-heading"
-              :aria-expanded="sections.chats"
-              @click="sections.chats = !sections.chats"
-            >
-              <ChevronDown v-if="sections.chats" :size="12" /><ChevronRight
-                v-else
-                :size="12"
-              />Conversations</button>
-              <button class="icon-button" aria-label="New chat" title="New chat" aria-haspopup="dialog" :disabled="example || busy" @click="openNewConversation"><Plus :size="16" /></button>
-            </div>
-            <template v-if="sections.chats"
-              ><template v-if="example"
-                ><button class="tree-row current" @click="chatVisible = true">
-                  <span class="status-dot live" /><span
-                    >Build the agent workspace</span
-                  ></button
-                ><button class="tree-row" @click="chatVisible = true">
-                  <MessageSquare :size="13" /><span
-                    >Refine the diff viewer</span
-                  >
-                </button></template
-              ><button
-                v-for="thread in visibleRepoThreads"
-                :key="thread.id"
-                :title="thread.title"
-                aria-haspopup="menu" @contextmenu="conversationMenu($event, thread)" @keydown.shift.f10.prevent="conversationMenu($event, thread)"
-                class="tree-row"
-                :class="{ current: selectedThreadId === thread.id }"
-                :aria-current="selectedThreadId === thread.id ? 'true' : undefined"
-                @click="
-                  chatVisible = true;
-                  chat?.select(thread.id);
-                "
-              >
-                <span
-                  class="status-dot"
-                  :class="{ live: !!thread.activeRunId }"
-                /><span>{{ thread.title }}</span>
-              </button>
-              <p v-if="!example && !visibleRepoThreads.length" class="nav-hint">
-                {{
-                  t3Connected
-                    ? "No chats in this worktree"
-                    : "Connect T3 Code to see chats"
-                }}
-              </p></template
             >
           </div>
           <div v-show="!chatVisible" class="nav-section compact">
@@ -1133,10 +1149,13 @@ onUnmounted(() => {
         :context="context"
         :example="example"
         :repo="repo"
+        :selected-thread-id="selectedThreadId"
+        :open-thread-ids="chatTabs.ids"
+        @activity="chatActivityStates = $event"
         @clear-context="context = ''"
         @select-worktree="openThreadWorktree"
         @threads="receiveThreads"
-        @selection="selectedThreadId = $event"
+        @selection="receiveChatSelection"
         @attention="chatNeedsAttention = $event"
       />
       <div v-show="!chatVisible" class="sidebar-footer">
@@ -1161,6 +1180,10 @@ onUnmounted(() => {
           Exit preview<X :size="12" />
         </button>
       </div>
+      <ChatTabs v-show="chatVisible" ref="chatNavigation" :ids="chatTabs.ids" :selected="selectedThreadId" :threads="threads" :projects="projects"
+        :activity="chatIndicators" :repository-name="w.repositoryName" :actions="chatActions" :disabled="busy || example"
+        @error="error = $event"
+        @select="selectChat" @close="closeChat" @move="(id, target) => chatTabs = moveChatTab(chatTabs, id, target)" @new="openNewConversation" />
       <template v-if="snapshot">
         <div v-if="snapshot.operation" class="operation-banner">
           <GitMerge :size="16" /><strong
@@ -1189,7 +1212,7 @@ onUnmounted(() => {
           </button>
         </div>
         <template v-if="view === 'changes'">
-          <div class="changes-title">
+          <div v-if="!chatVisible" class="changes-title">
             <div>
               <h1>Local changes</h1>
               <p>

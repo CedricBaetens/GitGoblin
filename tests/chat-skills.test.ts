@@ -3,6 +3,25 @@ import { availableSkills, insertSkill, searchSkills, skillTrigger } from '../app
 import type { T3Skill } from '../app/lib/types';
 const skill = (name: string, extra: Partial<T3Skill> = {}): T3Skill => ({ name, enabled: true, path: `C:/${name}/SKILL.md`, ...extra });
 
+it('ranks an exact namespaced skill ahead of prefixes and description matches', () => {
+  const skills = availableSkills({ skills: [
+    skill('debug', { description: 'Find problems before creating a PR' }),
+    skill('presentations'), skill('mattpocock-skills:prototype'), skill('mattpocock-skills:pr'),
+  ] }, 'D:/worktree');
+  expect(searchSkills(skills, 'pr').map(item => item.name)).toEqual([
+    'mattpocock-skills:pr', 'mattpocock-skills:prototype', 'presentations', 'debug',
+  ]);
+  expect(searchSkills([...skills].reverse(), 'PR')[0]?.name).toBe('mattpocock-skills:pr');
+});
+
+it('ranks displayed names and name substrings ahead of descriptions with stable ties', () => {
+  const skills = [skill('z-last', { description: 'PR workflow' }), skill('a-first', { displayName: 'PR' }), skill('open-pr')];
+  expect(searchSkills(skills, ' pr ').map(item => item.name)).toEqual(['a-first', 'open-pr', 'z-last']);
+  expect(searchSkills(skills, 'missing')).toEqual([]);
+  expect(searchSkills(skills, '').map(item => item.name)).toEqual(['a-first', 'open-pr', 'z-last']);
+  expect(searchSkills([skill('pr-extra'), skill('pr')], 'pr')[0]?.name).toBe('pr');
+});
+
 it('detects a slash query at the caret without interpreting paths and URLs as skills', () => {
   expect(skillTrigger('/', 1)).toEqual({ query: '', start: 0, end: 1 });
   expect(skillTrigger('Please /matt:tri next', 16)).toEqual({ query: 'matt:tri', start: 7, end: 16 });

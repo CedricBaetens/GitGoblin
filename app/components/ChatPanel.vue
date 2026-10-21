@@ -23,7 +23,8 @@ import { imageMimeTypes, uploadChatImage, validateChatImages } from '~/lib/chat-
 import { insertSkill, searchSkills, skillTrigger } from '~/lib/chat-skills';
 import { pendingQuestions } from '~/lib/chat-questions';
 import { conversationDefaults, conversationPresets, conversationPrompt, newConversationWorktree } from '~/lib/conversation-presets';
-import { isThreadRunning, repositoryThreadKey, repositoryThreads, repositoryThreadSelection } from "~/lib/threads";
+import { isThreadRunning, repositoryThreads } from "~/lib/threads";
+import { chatActivity } from "~/lib/chat-tabs";
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop, git } from "~/lib/native";
 import type { T3Thread, T3Project, T3Projection, T3ImageAttachment, T3Skill } from "~/lib/types";
@@ -32,6 +33,8 @@ const props = defineProps<{
   example: boolean;
   repo: string;
   visible: boolean;
+  selectedThreadId: string;
+  openThreadIds: string[];
 }>();
 const emit = defineEmits<{
   clearContext: [];
@@ -39,6 +42,7 @@ const emit = defineEmits<{
   threads: [threads: T3Thread[], projects: T3Project[], connected: boolean];
   selection: [threadId: string];
   attention: [needed: boolean];
+  activity: [states: Record<string, { attention: boolean; response: string }>];
 }>();
 const client = new T3Client(() => invoke<string>("t3_ticket"));
 const state = ref("disconnected"),
@@ -155,15 +159,20 @@ async function chooseSkill(skill: T3Skill) {
 }
 function composerKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
-  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void send(); return; }
-  if (!skillMenuOpen.value) return;
-  if (event.key === 'Escape') { event.preventDefault(); skillsDismissed.value = true; return; }
-  if (['ArrowDown', 'ArrowUp'].includes(event.key) && skillMatches.value.length) {
-    event.preventDefault();
-    skillIndex.value = (skillIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + skillMatches.value.length) % skillMatches.value.length;
-    void nextTick(() => skillMenu.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }));
-  } else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && skillMatches.value[skillIndex.value]) {
-    event.preventDefault(); void chooseSkill(skillMatches.value[skillIndex.value]!);
+  if (skillMenuOpen.value) {
+    if (event.key === 'Escape') { event.preventDefault(); skillsDismissed.value = true; return; }
+    if (['ArrowDown', 'ArrowUp'].includes(event.key) && skillMatches.value.length) {
+      event.preventDefault();
+      skillIndex.value = (skillIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + skillMatches.value.length) % skillMatches.value.length;
+      void nextTick(() => skillMenu.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }));
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && skillMatches.value[skillIndex.value]) {
+      event.preventDefault(); void chooseSkill(skillMatches.value[skillIndex.value]!); return;
+    }
+  }
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault(); void send();
   }
 }
 const conversationBody = ref<HTMLElement>();
@@ -191,7 +200,6 @@ watch(() => props.visible, async (visible) => {
     conversationBody.value.scrollTop = conversationScroll;
   else void scrollToLatest();
 });
-const rememberedThreads = ref<Record<string, string>>({});
 const thread = computed(() =>
   threads.value.find((t) => t.id === selectedId.value),
 );
@@ -230,14 +238,10 @@ client.onChange = () => {
   projects.value = [...client.projects];
   projection.value = client.projection ? { ...client.projection } : undefined;
   emit("threads", threads.value, projects.value, connected.value);
+  if (connected.value) client.watchThreads(threads.value.filter(thread => !thread.deletedAt && (!thread.archivedAt || props.openThreadIds.includes(thread.id))).map(thread => thread.id));
+  emit('activity', Object.fromEntries([...client.projections].map(([id, projection]) => [id, chatActivity(projection)])));
 };
-function select(id: string, followWorktree = true) {
-  const t = threads.value.find((thread) => thread.id === id);
-  const path = t?.worktreePath || projects.value.find((project) => project.id === t?.projectId)?.workspaceRoot;
-  if (id && path && repositoryThreadKey(path) === repositoryThreadKey(props.repo)) {
-    rememberedThreads.value[repositoryThreadKey(path)] = id;
-    try { localStorage.setItem('gitgoblin.selectedConversations', JSON.stringify(rememberedThreads.value)); } catch { /* Keep the selection in memory if storage is unavailable. */ }
-  }
+function select(id: string) {
   followMessages = true;
   conversationScroll = undefined;
   if (selectedId.value) drafts.set(selectedId.value, prompt.value);
@@ -245,7 +249,6 @@ function select(id: string, followWorktree = true) {
   selectedId.value = id;
   client.selectThread(id);
   void scrollToLatest();
-  if (followWorktree && path) emit("selectWorktree", path, id);
 }
 async function pair() {
   try {
@@ -322,12 +325,10 @@ async function respond(id: string, decision: "accept" | "decline") {
     error.value = String(e);
   }
 }
-async function openCreatedConversation(id: string, text: string, path: string) {
-  rememberedThreads.value[repositoryThreadKey(path)] = id;
-  select(id, false);
+async function openCreatedConversation(id: string, text: string) {
+  select(id);
   prompt.value = text;
   drafts.set(id, text);
-  emit("selectWorktree", path, id);
   await nextTick();
   composer.value?.focus();
 }
@@ -357,7 +358,7 @@ async function create(preset: (typeof conversationPresets)[number]) {
       worktreePath,
     );
     showNew.value = false;
-    await openCreatedConversation(result.threadId, instruction, worktreePath);
+    await openCreatedConversation(result.threadId, instruction);
     if (instruction.trim()) {
       sending.value = true;
       try {
@@ -419,11 +420,6 @@ function approvalContext(id: string) {
   return typeof item?.prompt === "string" ? item.prompt : "";
 }
 onMounted(async () => {
-  try {
-    const saved = JSON.parse(localStorage.getItem('gitgoblin.selectedConversations') || '{}');
-    if (saved && typeof saved === 'object' && !Array.isArray(saved))
-      rememberedThreads.value = Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-  } catch { /* Invalid preferences do not prevent connecting. */ }
   if (desktop()) {
     try {
       const saved = await invoke<string | null>("t3_restore");
@@ -439,17 +435,24 @@ onMounted(async () => {
     }
   }
 });
-watch([() => props.repo, connected, matchingThreads], () => {
-  if (props.example) return;
-  const next = connected.value ? repositoryThreadSelection(matchingThreads.value, rememberedThreads.value[repositoryThreadKey(props.repo)]) : '';
-  if (next !== selectedId.value) select(next, false);
+let followedWorktree = '';
+watch([selectedId, connected, () => thread.value?.worktreePath, projects], () => {
+  const path = thread.value?.worktreePath || projects.value.find(project => project.id === thread.value?.projectId)?.workspaceRoot;
+  const key = path && selectedId.value ? `${selectedId.value}:${path}` : '';
+  if (connected.value && key && key !== followedWorktree) {
+    followedWorktree = key;
+    emit('selectWorktree', path!, selectedId.value);
+  }
+  if (!selectedId.value) followedWorktree = '';
+});
+watch(() => props.selectedThreadId, id => {
+  if (id !== selectedId.value) select(id);
 }, { immediate: true });
 onUnmounted(() => {
   for (const draft of Object.values(imageDrafts.value)) for (const image of draft) URL.revokeObjectURL(image.preview);
   client.disconnect();
 });
 defineExpose({
-  select,
   settle,
   newConversation: newChat,
   focusComposer: () => composer.value?.focus(),
@@ -499,7 +502,7 @@ defineExpose({
       <div ref="conversationBody" class="conversation-body" @scroll="trackConversationScroll">
         <div v-if="!thread" class="panel-empty">
           <MessageSquare :size="26" />
-          <p>Select a conversation in the left sidebar to review its work.</p>
+          <p>Open a chat from All chats, or start a new conversation.</p>
         </div>
         <template v-for="turn in turns" :key="turn.id">
           <div v-for="message in turn.users" :key="message.id" class="message user">
@@ -623,6 +626,7 @@ defineExpose({
         v-model="prompt"
         :disabled="!connected || !thread || example"
         placeholder="Give an instruction…"
+        title="Enter to send; Shift+Enter for a new line"
         aria-label="Agent instruction"
         role="combobox" aria-autocomplete="list" :aria-expanded="skillMenuOpen" :aria-controls="skillMenuOpen ? skillMenuId : undefined"
         :aria-activedescendant="skillMenuOpen && skillMatches.length ? `${skillMenuId}-${skillIndex}` : undefined"
@@ -654,7 +658,7 @@ defineExpose({
         ><button
           class="send-button"
           aria-label="Send instruction"
-          :title="thread?.activeRunId ? 'Queue instruction after the current task' : 'Send instruction (Ctrl+Enter)'"
+          :title="thread?.activeRunId ? 'Queue instruction after the current task (Enter)' : 'Send instruction (Enter) · Shift+Enter for a new line'"
           :disabled="
             !connected || !thread || (!prompt.trim() && !images.length) || sending || !!settlingId || example
           "
@@ -735,7 +739,7 @@ defineExpose({
           <div class="conversation-options">
             <label>Project<select v-model="newProject" :disabled="creating" @change="changeNewProject">
               <option disabled value="">Choose a project</option>
-              <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title || p.workspaceRoot }}</option>
+              <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title || p.name || p.workspaceRoot }} · {{ p.workspaceRoot }}</option>
             </select></label>
             <label>Model<select v-model="newModel" :disabled="creating">
               <option v-for="option in modelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>

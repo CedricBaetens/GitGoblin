@@ -74,10 +74,12 @@ export class T3Client {
   private threadId = "";
   private legacyProtocol = false;
   private untitledThreads = new Set<string>();
-  private cancelThread?: () => void;
+  private threadStreams = new Map<string, () => void>();
+  private watchedThreads: string[] = [];
+  projections = new Map<string, T3Projection>();
   projects: T3Project[] = [];
   threads: T3Thread[] = [];
-  projection?: T3Projection;
+  get projection() { return this.projections.get(this.threadId); }
   status = "disconnected";
   error = "";
   onChange: () => void = () => {};
@@ -223,7 +225,7 @@ export class T3Client {
             this.failures = 0;
           } else if ((item.kind === "thread.updated" || item.kind === "thread-upserted")) {
             this.threads = this.threads.filter((t) => t.id !== item.thread.id);
-            if (item.location !== "archive") this.threads.push(normalizeThread(item.thread));
+            this.threads.push({ ...normalizeThread(item.thread), ...(item.location === "archive" ? { archivedAt: item.thread.archivedAt || new Date().toISOString() } : {}) });
           } else if ((item.kind === "thread.removed" || item.kind === "thread-removed"))
             this.threads = this.threads.filter((t) => t.id !== item.threadId);
           else if ((item.kind === "project.updated" || item.kind === "project-upserted"))
@@ -258,7 +260,8 @@ export class T3Client {
         this.onChange();
       });
       stream.promise.then(()=>{if(generation===this.generation&&!this.stopped&&socket.readyState===WebSocket.OPEN){this.error='The T3 conversation stream ended. Reconnecting.';socket.close();}},()=>{});
-      if (this.threadId) this.selectThread(this.threadId);
+      this.threadStreams.clear();
+      this.watchThreads(this.watchedThreads);
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
       this.lost(generation);
@@ -277,7 +280,7 @@ export class T3Client {
       );
     }
     this.pending.clear();
-    this.cancelThread = undefined;
+    this.threadStreams.clear();
     if (this.stopped) {
       this.onChange();
       return;
@@ -292,29 +295,39 @@ export class T3Client {
       );
   }
   selectThread(id: string) {
-    this.cancelThread?.();
     this.threadId = id;
-    this.projection = undefined;
+    this.watchThreads(this.watchedThreads);
     this.onChange();
-    if (!id || this.socket?.readyState !== WebSocket.OPEN) return;
+  }
+  watchThreads(ids: string[]) {
+    this.watchedThreads = ids;
+    const wanted = new Set([...ids, this.threadId].filter(Boolean));
+    for (const [id, cancel] of this.threadStreams) {
+      if (!wanted.has(id)) { cancel(); this.threadStreams.delete(id); this.projections.delete(id); }
+    }
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    for (const id of wanted) if (!this.threadStreams.has(id)) this.subscribeThread(id);
+  }
+  private subscribeThread(id: string) {
     const generation = this.generation;
     const stream = this.request(
       "orchestration.subscribeThread",
       { threadId: id },
       (item) => {
-        if (id !== this.threadId || generation !== this.generation) return;
+        if (generation !== this.generation) return;
         if (item.kind === "snapshot") {
-          this.projection = item.projection || (item.snapshot?.thread ? {
+          const projection = item.projection || (item.snapshot?.thread ? {
             thread: normalizeThread(item.snapshot.thread),
             messages: item.snapshot.thread.messages || [],
             runtimeRequests: [],
             turnItems: [],
             activities: item.snapshot.thread.activities || [],
           } : undefined);
+          if (projection) this.projections.set(id, projection);
           this.onChange();
         } else if (item.kind === "event") {
           const event = item.event;
-          const p = this.projection;
+          const p = this.projections.get(id);
           if (!p) return;
           if (event.type === "thread.message-sent" && event.payload?.messageId) {
             const incoming = { ...event.payload, id: event.payload.messageId };
@@ -352,7 +365,7 @@ export class T3Client {
         }
       },
     );
-    this.cancelThread = stream.cancel;
+    this.threadStreams.set(id, stream.cancel);
     stream.promise.catch((error) => {
       if (
         id === this.threadId &&
@@ -492,6 +505,8 @@ export class T3Client {
       item.reject(new Error("Disconnected."));
     }
     this.pending.clear();
+    this.threadStreams.clear();
+    this.projections.clear();
     this.status = "disconnected";
     this.onChange();
   }

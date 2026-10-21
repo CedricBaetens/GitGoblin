@@ -37,6 +37,48 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it('keeps background chat subscriptions and activity separate when switching or closing tabs', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    client.watchThreads(['repo-a', 'repo-b']);
+    client.selectThread('repo-a');
+    const subscriptions = socket.sent.filter(frame => frame.tag === 'orchestration.subscribeThread');
+    expect(subscriptions.map(frame => frame.payload.threadId)).toEqual(['repo-a', 'repo-b']);
+    for (const subscription of subscriptions) {
+      socket.receive({ _tag: 'Chunk', requestId: subscription.id, values: [{ kind: 'snapshot', projection: {
+        thread: { id: subscription.payload.threadId }, messages: [], runtimeRequests: [], turnItems: [],
+      } }] });
+    }
+    client.selectThread('repo-b');
+    const background = subscriptions[0];
+    socket.receive({ _tag: 'Chunk', requestId: background.id, values: [{ kind: 'event', event: {
+      type: 'runtime-request.created', payload: { id: 'approval', kind: 'approval', status: 'pending' },
+    } }] });
+    expect(client.projection?.thread.id).toBe('repo-b');
+    expect(client.projection?.runtimeRequests).toEqual([]);
+    expect(client.projections.get('repo-a')?.runtimeRequests[0]?.id).toBe('approval');
+    client.selectThread('');
+    expect(client.projection).toBeUndefined();
+    expect(client.projections.get('repo-a')?.runtimeRequests).toHaveLength(1);
+    expect(socket.sent.filter(frame => frame._tag === 'Interrupt')).toEqual([]);
+    expect(socket.sent.filter(frame => frame.tag === 'orchestration.dispatchCommand')).toEqual([]);
+    client.watchThreads(['repo-a']);
+    expect(socket.sent.filter(frame => frame._tag === 'Interrupt')).toEqual([{ _tag: 'Interrupt', requestId: subscriptions[1].id }]);
+  });
+  it('retains archived shell updates for history and removes deleted conversations', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const receive = (item: unknown) => socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [item] });
+    receive({ kind: 'snapshot', snapshot: { schemaVersion: 2, projects: [], threads: [{ id: 'one' }] } });
+    receive({ kind: 'thread.updated', location: 'archive', thread: { id: 'one', title: 'Archived' } });
+    expect(client.threads[0]).toMatchObject({ id: 'one', title: 'Archived', archivedAt: expect.any(String) });
+    receive({ kind: 'thread.removed', threadId: 'one' });
+    expect(client.threads).toEqual([]);
+  });
   it.each([false, true])('settles conversations through T3 and waits for authoritative updates (legacy=%s)', async legacy => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);
@@ -171,12 +213,14 @@ describe("T3 client contract", () => {
     await client.connect();
     const socket = FakeSocket.latest;
     const thread = { id: "empty", title } as any;
-    client.projection = { thread, messages: [], runtimeRequests: [], turnItems: [] };
+    client.selectThread(thread.id);
+    const subscription = socket.sent.findLast(frame => frame.tag === 'orchestration.subscribeThread');
+    socket.receive({ _tag: 'Chunk', requestId: subscription.id, values: [{ kind: 'snapshot', projection: { thread, messages: [], runtimeRequests: [], turnItems: [] } }] });
     const first = client.sendMessage(thread, "Investigate issue");
     expect(socket.sent.at(-1).payload.titleSeed).toBe("Investigate issue");
     socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
     await first;
-    client.projection.messages.push({ role: "user" } as any);
+    client.projection!.messages.push({ role: "user" } as any);
     const second = client.sendMessage(thread, "Follow up");
     expect(socket.sent.at(-1).payload.titleSeed).toBeUndefined();
     socket.receive({ _tag: "Exit", requestId: socket.sent.at(-1).id, exit: { _tag: "Success", value: {} } });
