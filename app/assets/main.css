@@ -961,14 +961,25 @@ small {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.composer-footer > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1;
+}
+.composer-footer > button > svg { display: block; }
 .send-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  padding: 0;
   background: #8e9ec9;
   color: #17213a;
 }
+.send-button:hover:not(:disabled) { background: #a7b6ed; color: #17213a; }
+.composer-footer > .stop:hover:not(:disabled) { background: #38252d; color: #f0b1b6; border-color: #b47780; }
 .stop {
   border: 1px solid #765056;
   color: #d89c9e;

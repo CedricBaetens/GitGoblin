@@ -881,7 +881,7 @@ onUnmounted(() => {
             stroke-width="2"
           /></svg
         ><span>gitgoblin</span>
-        <nav class="workspace-modes" aria-label="Workspace mode" data-tauri-drag-region="false">
+        <nav class="workspace-modes" aria-label="Workspace mode">
           <button :aria-pressed="!chatVisible" @click="workspaceMode = 'git'"><GitBranch :size="16" />Git</button>
           <button :aria-pressed="chatVisible" @click="workspaceMode = 'chat'">
             <MessageSquare :size="16" />Chat
@@ -889,7 +889,7 @@ onUnmounted(() => {
             <span v-else-if="!chatVisible && allActiveAgents.length" class="mode-running" role="status" :aria-label="`${allActiveAgents.length} agent tasks running`" :title="`${allActiveAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
           </button>
         </nav>
-        <nav class="application-menu" aria-label="Application menu" data-tauri-drag-region="false">
+        <nav class="application-menu" aria-label="Application menu">
           <button aria-haspopup="true" @click="toggleTopMenu(fileMenu, $event)">File<ChevronDown :size="11" /></button>
         </nav>
       </div>
@@ -897,7 +897,7 @@ onUnmounted(() => {
         <button :disabled="busy" @click="chooseRepository()"><FolderOpen :size="15" />Open repository…<kbd>Ctrl O</kbd></button>
         <button v-if="!desktop()" @click="fileMenu?.hidePopover(); w.showExample()"><Layers :size="15" />Explore example workspace</button>
       </div>
-      <nav v-if="!chatVisible && favorites.length" class="favorite-tabs" data-tauri-drag-region="false" aria-label="Favorite repositories">
+      <nav v-if="!chatVisible && favorites.length" class="favorite-tabs" aria-label="Favorite repositories">
         <button v-for="path in favorites" :key="path" aria-haspopup="menu" @contextmenu="repositoryContext($event, path)" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
           <Star :size="12" fill="currentColor" /><span>{{ w.repositoryName(path) }}</span>
         </button>

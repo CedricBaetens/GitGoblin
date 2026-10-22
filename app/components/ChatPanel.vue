@@ -716,31 +716,23 @@ defineExpose({
         <span
           :title="thread?.modelSelection.model">{{ thread?.modelSelection.model }}</span
         ><button
-          v-if="connected && thread && !example"
-          type="button"
-          :disabled="sending || !!settlingId"
-          title="Mark this conversation as settled and remove it from the active list"
-          @click="settle(thread.id).catch(e => error = String(e))"
-        >
-          <LoaderCircle v-if="settlingId === thread.id" :size="13" class="spin" />
-          <Check v-else :size="13" /> Settle conversation
-        </button><button
           v-if="thread?.activeRunId"
-          class="icon-button stop"
+          class="stop"
+          aria-label="Stop current task"
           title="Stop current task"
           @click="stop"
         >
-          <Square :size="13" /></button
+          <Square :size="14" /><span>Stop</span></button
         ><button
           class="send-button"
-          aria-label="Send instruction"
+          :aria-label="thread?.activeRunId ? 'Queue instruction' : 'Send instruction'"
           :title="thread?.activeRunId ? 'Queue instruction after the current task (Enter)' : 'Send instruction (Enter) · Shift+Enter for a new line'"
           :disabled="
             !connected || !thread || (!prompt.trim() && !images.length) || sending || !!settlingId || example
           "
           @click="send"
         >
-          <ArrowUp :size="17" />
+          <ArrowUp :size="16" /><span>{{ thread?.activeRunId ? 'Queue' : 'Send' }}</span>
         </button>
       </div>
     </div>

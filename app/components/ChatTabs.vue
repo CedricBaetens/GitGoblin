@@ -84,9 +84,9 @@ function drop(target: string) { if (dragged.value) emit('move', dragged.value, t
 defineExpose({ openAll, closePicker: () => picker.value?.close() });
 </script>
 <template>
-  <nav class="chat-tabs" aria-label="Chat tabs" data-tauri-drag-region="false">
+  <nav class="chat-tabs" aria-label="Chat tabs">
     <div ref="strip" class="chat-tab-strip" role="tablist" aria-label="Open chats" @wheel="event => { if (strip && Math.abs(event.deltaY) > Math.abs(event.deltaX)) { strip.scrollLeft += event.deltaY; event.preventDefault(); } }">
-      <div v-for="thread in tabs" :key="thread.id" class="chat-tab" :class="{ selected: selected === thread.id }" draggable="true"
+      <div v-for="thread in tabs" :key="thread.id" class="chat-tab" :class="{ selected: selected === thread.id }" draggable="true" data-tauri-drag-region="false"
         @contextmenu="chatMenu($event, thread)" @keydown.shift.f10.stop.prevent="chatMenu($event, thread)" @keydown.context-menu.stop.prevent="chatMenu($event, thread)"
         role="presentation" @dragstart="startDrag($event, thread.id)" @dragend="dragged = ''" @dragover.prevent @drop.prevent="drop(thread.id)">
         <button role="tab" aria-haspopup="menu" :aria-selected="selected === thread.id" aria-controls="conversation-panel" :tabindex="selected === thread.id ? 0 : -1"
