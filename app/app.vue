@@ -240,6 +240,14 @@ function branchMenu(event: MouseEvent | KeyboardEvent, branch: GitRef) {
   const local = branch.name.startsWith("refs/heads/");
   const target = local ? branch.name.replace("refs/heads/", "") : branch.name;
   const items = [
+    ...(['only', 'exclude'] as const).map(filter => ({
+      label: filter === 'only' ? 'Only view branch' : 'Exclude branch',
+      disabled: example.value,
+      run: () => {
+        view.value = 'history';
+        w.filterHistory(branch.name, filter);
+      },
+    })),
     {
       label: "Switch to branch",
       disabled: branch.current || busy.value || example.value,
@@ -2263,9 +2271,10 @@ onUnmounted(() => {
               <h1
                 class="[:where(&)]:m-0 [:where(&)]:text-[22px] [:where(&)]:tracking-[-0.6px] [:where(&)]:font-semibold"
               >
-                All commits
+                {{ w.historyBranch.value ? (w.historyBranch.value.mode === 'only' ? 'Only: ' : 'Excluding: ') + w.historyBranch.value.name.replace(/^refs\/(heads|remotes)\//, '') : 'All commits' }}
               </h1>
             </div>
+            <AppButton v-if="w.historyBranch.value" @click="w.filterHistory()">Clear branch filter</AppButton>
             <form
               class="search-field flex items-center gap-[7px] border-[1px] border-solid border-[#2d3544] rounded-[6px] py-0 px-[8px] text-[#6f7c95] [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:py-[7px] [&_input]:px-0 [&_input]:w-[185px] [&_input]:shadow-[none]"
               @submit.prevent="w.searchHistory()"

@@ -12,6 +12,7 @@ import {
 import { Check, MessageSquarePlus, LoaderCircle } from "lucide-vue-next";
 import { parseDiffFiles, splitDiffLines, selectedPatch } from "~/lib/diff";
 import { diffWindow, type DiffChange } from "~/lib/diff-window";
+import { diffFileStatus } from "~/lib/diff-files";
 import type { DiffSyntax } from "~/lib/syntax";
 const props = defineProps<{
   text: string;
@@ -118,6 +119,24 @@ onMounted(() => {
 });
 onUnmounted(() => resize?.disconnect());
 const parsed = computed(() => parseDiffFiles(props.text));
+const selectedFile = ref("");
+const navigationFiles = computed(() => parsed.value.flatMap(file => {
+  const status = diffFileStatus(file.header);
+  return status ? [status] : [];
+}));
+const displayed = computed(() => selectedFile.value
+  ? parsed.value.filter(file => diffFileStatus(file.header)?.path === selectedFile.value)
+  : parsed.value);
+watch(() => [props.path, props.mode], () => { selectedFile.value = ""; });
+watch(navigationFiles, (files) => {
+  if (!files.some(file => file.path === selectedFile.value)) selectedFile.value = "";
+});
+watch(selectedFile, async () => {
+  selected.value = new Set();
+  await nextTick();
+  if (scroller.value) scroller.value.scrollTop = 0;
+  onScroll();
+});
 const wrapLines = ref(false);
 const fontSize = ref(11);
 const rowHeight = computed(() => fontSize.value + 12);
@@ -149,7 +168,7 @@ function scrollSide(side: "left" | "right", event: Event) {
 }
 let horizontalResize: ResizeObserver | undefined;
 watch(
-  () => [props.text, layout.value, wrapLines.value, fontSize.value],
+  () => [props.text, selectedFile.value, layout.value, wrapLines.value, fontSize.value],
   async () => {
     await nextTick();
     horizontalResize?.disconnect();
@@ -173,7 +192,7 @@ onUnmounted(() => horizontalResize?.disconnect());
 const large = computed(
   () =>
     !wrapLines.value &&
-    parsed.value.reduce(
+    displayed.value.reduce(
       (n, f) => n + f.hunks.reduce((n, h) => n + h.lines.length, 0),
       0,
     ) > 500,
@@ -183,8 +202,8 @@ const geometry = computed(() => {
     width = 0;
   const longest = { left: "", right: "" };
   const changes: DiffChange[] = [];
-  const files = parsed.value.map((file) => {
-    if (parsed.value.length > 1) offset += 32;
+  const files = displayed.value.map((file) => {
+    if (displayed.value.length > 1) offset += 32;
     if (layout.value === "split" && file.hunks.length) offset += 29;
     const plainHeight =
       (file.header || "No text changes to display.").split("\n").length * 20 +
@@ -332,7 +351,9 @@ function context() {
           .sort((a, b) => a - b)
           .map((i) => lines[i])
           .join("\n")
-      : props.text,
+      : selectedFile.value
+        ? props.text.split(/(?=^diff --git )/m).find(part => diffFileStatus(part)?.path === selectedFile.value) || props.text
+        : props.text,
   );
 }
 </script>
@@ -445,6 +466,7 @@ function context() {
       {{ error }}
     </div>
     <div class="diff-body flex min-h-0 flex-1 [&_.diff-scroll]:min-w-0">
+      <DiffFileNavigator v-if="navigationFiles.length > 1" :files="navigationFiles" :selected="selectedFile" @select="selectedFile = $event" />
       <div class="diff-main flex flex-col flex-1 min-w-0 min-h-0 relative">
         <div
           v-if="loading && !text"
@@ -474,7 +496,7 @@ function context() {
                 v-if="files.length > 1"
                 class="diff-file-label [.large-diff_&]:h-[32px] [.large-diff_&]:whitespace-nowrap py-[9px] px-[12px] text-[#bac7e0] text-[11px] bg-[#1b2030] [overflow-wrap:anywhere]"
               >
-                {{ file.header.split("\n")[0] }}
+                {{ diffFileStatus(file.header)?.path || file.header.split("\n")[0] }}
               </div>
               <div
                 v-if="layout === 'split' && file.hunks.length"
@@ -486,7 +508,7 @@ function context() {
                 v-for="hunk in file.hunks"
                 :key="hunk.start"
                 class="hunk min-w-full w-max [.side-by-side_&]:w-full [.side-by-side_&]:min-w-0 [.wrap-lines_&]:w-full [.wrap-lines_&]:min-w-0"
-                :data-file="props.path || file.header.split('\n')[0]"
+                :data-file="props.path || diffFileStatus(file.header)?.path || file.header.split('\n')[0]"
               >
                 <div
                   class="hunk-header min-h-[42px] flex items-center justify-between gap-[15px] py-[7px] px-[12px] bg-[#202736] text-[#8093bc] text-[10px] border-t-[1px] border-solid border-t-[#2a3346] border-b-[1px] border-b-[#2a3346] mt-[8px] mx-0 mb-0 [&_button]:text-[9px] [&_button]:bg-[#293348] [&_button]:text-[#a1b4dd] [&_button]:[border-color:#34425b] [.large-diff_&]:h-[42px]"

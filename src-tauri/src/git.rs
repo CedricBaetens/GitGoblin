@@ -235,7 +235,7 @@ fn records(text: &str) -> Vec<Value> {
         (values.len() >= 6).then(|| json!({"id":values[0], "parents":values[1], "author":values[2], "date":values[3], "refs":values[4], "subject":values[5]}))
     }).collect()
 }
-fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<usize>) -> Result<Value, String> {
+fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<usize>, target: &str, mode: &str) -> Result<Value, String> {
     let count = format!("--max-count={}", limit.unwrap_or(500).clamp(1, 2000));
     let skip = format!("--skip={offset}");
     let mut args = vec![
@@ -246,10 +246,21 @@ fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<u
         "--date=iso-strict",
         "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%D%x1f%s%x00",
     ];
-    if path.is_empty() {
+    let branch = if target.is_empty() { String::new() } else {
+        if !target.starts_with("refs/heads/") && !target.starts_with("refs/remotes/") {
+            return Err("History filter requires a branch ref".into());
+        }
+        git(repo, &["show-ref", "--verify", "--hash", target])?.trim().to_string()
+    };
+    if !branch.is_empty() && mode == "only" {
+        args.push(&branch);
+    } else if path.is_empty() {
         // Internal snapshots are recovery data, not normal branch history.
         // Exclude ref roots rather than commits: shared branch ancestors must remain.
         args.extend(["--exclude=refs/t3/*", "--all", "--decorate-refs-exclude=refs/t3/*"]);
+    }
+    if !branch.is_empty() && mode == "exclude" {
+        args.extend(["--not", &branch, "--not"]);
     }
     if !search.is_empty() {
         args.extend(["--fixed-strings", "--regexp-ignore-case", "--grep", search]);
@@ -369,7 +380,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
             let remotes = git(&repo, &["remote", "-v"])?;
             json!({"root":repo.to_string_lossy().trim_start_matches("\\\\?\\"),"repositoryRoot":repository_root,"branch":branch.trim(),"files":files,"refs":refs,"worktrees":worktrees,"operation":operation,"stashes":stashes,"remotes":remotes,"head":git(&repo,&["rev-parse","--verify","HEAD"]).unwrap_or_default().trim()})
         }
-        "history" => history(&repo, &req.path, &req.text, req.offset, req.limit)?,
+        "history" => history(&repo, &req.path, &req.text, req.offset, req.limit, &req.target, &req.mode)?,
         "diff" => {
             relative(&req.path)?;
             let before = fingerprint(&repo, &req.path)?;
@@ -1225,6 +1236,34 @@ mod tests {
         git(dir.path(), &["branch", "recovered", checkpoint.trim()]).unwrap();
         let recovered = execute(request(dir.path(), "history")).unwrap();
         assert_eq!(recovered.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn history_filters_branch_reachability_before_paging() {
+        let dir = fixture();
+        fs::write(dir.path().join("file.txt"), "base\n").unwrap();
+        git(dir.path(), &["add", "."]).unwrap();
+        git(dir.path(), &["commit", "-m", "base"]).unwrap();
+        git(dir.path(), &["branch", "filtered"]).unwrap();
+        fs::write(dir.path().join("file.txt"), "next\n").unwrap();
+        git(dir.path(), &["commit", "-am", "next"]).unwrap();
+        let mut req = request(dir.path(), "history");
+        req.target = "refs/heads/filtered".into();
+        req.mode = "only".into();
+        let only = execute(req).unwrap();
+        assert_eq!(only.as_array().unwrap().len(), 1);
+        assert_eq!(only[0]["subject"], "base");
+        let mut req = request(dir.path(), "history");
+        req.target = "refs/heads/filtered".into();
+        req.mode = "exclude".into();
+        req.limit = Some(1);
+        let excluded = execute(req).unwrap();
+        assert_eq!(excluded.as_array().unwrap().len(), 1);
+        assert_eq!(excluded[0]["subject"], "next");
+        let mut req = request(dir.path(), "history");
+        req.target = "--all".into();
+        req.mode = "only".into();
+        assert!(execute(req).is_err());
     }
 
     #[test]

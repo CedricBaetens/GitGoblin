@@ -19,6 +19,13 @@ export function useWorkbench() {
     snapshot = ref<Snapshot>(),
     commits = ref<Commit[]>([]);
   const historyLoading = ref(false), historyHasMore = ref(false);
+  const historyBranch = ref<{ name: string; mode: 'only' | 'exclude' }>();
+  function filterHistory(name?: string, mode: 'only' | 'exclude' = 'only') {
+    historyBranch.value = name ? { name, mode } : undefined;
+    commits.value = [];
+    void loadHistory(true);
+  }
+  watch(repo, () => { historyBranch.value = undefined; }, { flush: 'sync' });
   const historyPageSize = 500;
   let historyGeneration = 0, historyQuery = '';
   async function loadHistory(reset = false) {
@@ -29,7 +36,7 @@ export function useWorkbench() {
     const offset = reset ? 0 : commits.value.length;
     historyLoading.value = true;
     try {
-      const page = await git<Commit[]>({ repo: root, action: 'history', text: query, offset, limit: historyPageSize + 1 });
+      const page = await git<Commit[]>({ repo: root, action: 'history', text: query, target: historyBranch.value?.name, mode: historyBranch.value?.mode, offset, limit: historyPageSize + 1 });
       if (request !== historyGeneration || root !== repo.value) return;
       const items = page.slice(0, historyPageSize);
       if (reset) {
@@ -517,6 +524,8 @@ export function useWorkbench() {
     removeRepository,
     snapshot,
     commits,
+    historyBranch,
+    filterHistory,
     historyLoading,
     historyHasMore,
     loadHistory,
