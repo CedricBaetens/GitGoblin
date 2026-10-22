@@ -1,10 +1,27 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch, onMounted, onUnmounted, nextTick } from "vue";
+import type { ContextMenuHandle } from "~/lib/context-menu";
+import {
+  computed,
+  ref,
+  shallowRef,
+  watch,
+  onMounted,
+  onUnmounted,
+  nextTick,
+} from "vue";
 import { Check, MessageSquarePlus, LoaderCircle } from "lucide-vue-next";
 import { parseDiffFiles, splitDiffLines, selectedPatch } from "~/lib/diff";
-import { diffWindow, type DiffChange } from '~/lib/diff-window';
+import { diffWindow, type DiffChange } from "~/lib/diff-window";
 import type { DiffSyntax } from "~/lib/syntax";
-const props = defineProps<{ text: string; mode: string; path?: string; editable?: boolean; loading?: boolean; disabled?: boolean; wholeFile?: boolean }>();
+const props = defineProps<{
+  text: string;
+  mode: string;
+  path?: string;
+  editable?: boolean;
+  loading?: boolean;
+  disabled?: boolean;
+  wholeFile?: boolean;
+}>();
 const syntax = shallowRef<DiffSyntax>({});
 const scroller = ref<HTMLElement>();
 let worker: Worker | undefined;
@@ -12,28 +29,44 @@ let syntaxRequest = 0;
 function highlight() {
   syntax.value = {};
   const id = ++syntaxRequest;
-  worker?.postMessage({ id, text: props.text, path: props.path || '' });
+  worker?.postMessage({ id, text: props.text, path: props.path || "" });
 }
 onMounted(() => {
   try {
-    worker = new Worker(new URL('../lib/syntax.worker.ts', import.meta.url), { type: 'module' });
-    worker.onmessage = ({ data }) => { if (data.id === syntaxRequest) syntax.value = data.tokens; };
+    worker = new Worker(new URL("../lib/syntax.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    worker.onmessage = ({ data }) => {
+      if (data.id === syntaxRequest) syntax.value = data.tokens;
+    };
     highlight();
-  } catch { /* Plain text remains usable when workers are unavailable. */ }
+  } catch {
+    /* Plain text remains usable when workers are unavailable. */
+  }
 });
 onUnmounted(() => worker?.terminate());
 watch(() => [props.text, props.path], highlight);
-const emit = defineEmits<{ patch: [text: string]; context: [text: string]; editContext: [text: string]; "update:wholeFile": [value: boolean] }>();
-const selectionMenu = ref<HTMLDivElement>();
-let editSelection = '';
+const emit = defineEmits<{
+  patch: [text: string];
+  context: [text: string];
+  editContext: [text: string];
+  "update:wholeFile": [value: boolean];
+}>();
+const selectionMenu = ref<ContextMenuHandle>();
+let editSelection = "";
 async function openSelectionMenu(event: MouseEvent) {
   const selection = window.getSelection();
-  if (!selection?.rangeCount || selection.isCollapsed || !scroller.value) return;
+  if (!selection?.rangeCount || selection.isCollapsed || !scroller.value)
+    return;
   const selectedRange = selection.getRangeAt(0);
-  if (!scroller.value.contains(selectedRange.startContainer) || !scroller.value.contains(selectedRange.endContainer)) return;
+  if (
+    !scroller.value.contains(selectedRange.startContainer) ||
+    !scroller.value.contains(selectedRange.endContainer)
+  )
+    return;
   const snippets: string[] = [];
-  let location = '';
-  for (const code of scroller.value.querySelectorAll('.diff-line code')) {
+  let location = "";
+  for (const code of scroller.value.querySelectorAll(".diff-line code")) {
     if (!selectedRange.intersectsNode(code)) continue;
     const range = document.createRange();
     range.selectNodeContents(code);
@@ -43,29 +76,35 @@ async function openSelectionMenu(event: MouseEvent) {
       range.setEnd(selectedRange.endContainer, selectedRange.endOffset);
     const text = range.toString();
     if (!text) continue;
-    const row = code.closest('.diff-line')!;
-    const source = row.classList.contains('delete') || (row.classList.contains('split-cell') && row === row.parentElement?.firstElementChild) ? 'Original' : 'Modified';
-    const file = code.closest('.hunk')?.getAttribute('data-file') || props.path || '';
+    const row = code.closest(".diff-line")!;
+    const source =
+      row.classList.contains("delete") ||
+      (row.classList.contains("split-cell") &&
+        row === row.parentElement?.firstElementChild)
+        ? "Original"
+        : "Modified";
+    const file =
+      code.closest(".hunk")?.getAttribute("data-file") || props.path || "";
     const next = `${file} (${source}, ${props.mode} diff)`;
-    if (next !== location) { snippets.push(`\n${next}:`); location = next; }
+    if (next !== location) {
+      snippets.push(`\n${next}:`);
+      location = next;
+    }
     snippets.push(text);
   }
   if (!snippets.length) return;
   event.preventDefault();
-  editSelection = `Selected code for the requested edit. Original/deleted lines may no longer exist in the current file.\n${snippets.join('\n')}`;
-  await nextTick();
-  const menu = selectionMenu.value;
-  if (!menu) return;
-  menu.showPopover();
-  menu.style.left = `${Math.max(4, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 4))}px`;
-  menu.style.top = `${Math.max(4, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 4))}px`;
-  menu.querySelector('button')?.focus();
+  editSelection = `Selected code for the requested edit. Original/deleted lines may no longer exist in the current file.\n${snippets.join("\n")}`;
+  selectionMenu.value?.open(event, [
+    { label: "Ask T3 to edit selection", run: editInChat },
+  ]);
 }
 function editInChat() {
-  selectionMenu.value?.hidePopover();
-  emit('editContext', editSelection);
+  selectionMenu.value?.close();
+  emit("editContext", editSelection);
 }
-const scroll = ref(0), viewportHeight = ref(600);
+const scroll = ref(0),
+  viewportHeight = ref(600);
 function onScroll() {
   if (scroller.value) {
     scroll.value = scroller.value.scrollTop;
@@ -84,98 +123,181 @@ const fontSize = ref(11);
 const rowHeight = computed(() => fontSize.value + 12);
 onMounted(() => {
   try {
-    const saved = Number(localStorage.getItem('gitgoblin.diffFontSize'));
-    if (Number.isInteger(saved) && saved >= 9 && saved <= 20) fontSize.value = saved;
-  } catch { /* Keep the default when storage is unavailable. */ }
+    const saved = Number(localStorage.getItem("gitgoblin.diffFontSize"));
+    if (Number.isInteger(saved) && saved >= 9 && saved <= 20)
+      fontSize.value = saved;
+  } catch {
+    /* Keep the default when storage is unavailable. */
+  }
 });
-watch(fontSize, async size => {
-  try { localStorage.setItem('gitgoblin.diffFontSize', String(size)); } catch { /* Keep the size in memory. */ }
+watch(fontSize, async (size) => {
+  try {
+    localStorage.setItem("gitgoblin.diffFontSize", String(size));
+  } catch {
+    /* Keep the size in memory. */
+  }
   await nextTick();
   onScroll();
 });
-const layout = ref('split');
+const layout = ref("split");
 const horizontalScroll = ref({ left: 0, right: 0 });
 const horizontalWidth = ref({ left: 0, right: 0 });
-function scrollSide(side: 'left' | 'right', event: Event) {
-  horizontalScroll.value[side] = (event.currentTarget as HTMLElement).scrollLeft;
+function scrollSide(side: "left" | "right", event: Event) {
+  horizontalScroll.value[side] = (
+    event.currentTarget as HTMLElement
+  ).scrollLeft;
 }
 let horizontalResize: ResizeObserver | undefined;
-watch(() => [props.text, layout.value, wrapLines.value, fontSize.value], async () => {
-  await nextTick();
-  horizontalResize?.disconnect();
-  horizontalResize = new ResizeObserver(() => {
-    for (const side of ['left', 'right'] as const) {
-      const bar = scroller.value?.parentElement?.querySelector<HTMLElement>(`[data-scroll-side="${side}"]`);
-      horizontalWidth.value[side] = bar?.scrollWidth || 0;
-    }
-  });
-  for (const content of scroller.value?.parentElement?.querySelectorAll('.side-scrollbar code') || []) horizontalResize.observe(content);
-}, { immediate: true, flush: 'post' });
+watch(
+  () => [props.text, layout.value, wrapLines.value, fontSize.value],
+  async () => {
+    await nextTick();
+    horizontalResize?.disconnect();
+    horizontalResize = new ResizeObserver(() => {
+      for (const side of ["left", "right"] as const) {
+        const bar = scroller.value?.parentElement?.querySelector<HTMLElement>(
+          `[data-scroll-side="${side}"]`,
+        );
+        horizontalWidth.value[side] = bar?.scrollWidth || 0;
+      }
+    });
+    for (const content of scroller.value?.parentElement?.querySelectorAll(
+      ".side-scrollbar code",
+    ) || [])
+      horizontalResize.observe(content);
+  },
+  { immediate: true, flush: "post" },
+);
 onUnmounted(() => horizontalResize?.disconnect());
 // Wrapped rows have variable heights, so render them without fixed-height windowing.
-const large = computed(() => !wrapLines.value && parsed.value.reduce((n, f) => n + f.hunks.reduce((n, h) => n + h.lines.length, 0), 0) > 500);
+const large = computed(
+  () =>
+    !wrapLines.value &&
+    parsed.value.reduce(
+      (n, f) => n + f.hunks.reduce((n, h) => n + h.lines.length, 0),
+      0,
+    ) > 500,
+);
 const geometry = computed(() => {
-  let offset = 0, width = 0;
-  const longest = { left: '', right: '' };
+  let offset = 0,
+    width = 0;
+  const longest = { left: "", right: "" };
   const changes: DiffChange[] = [];
-  const files = parsed.value.map(file => {
+  const files = parsed.value.map((file) => {
     if (parsed.value.length > 1) offset += 32;
-    if (layout.value === 'split' && file.hunks.length) offset += 29;
-    const plainHeight = (file.header || 'No text changes to display.').split('\n').length * 20 + 24;
+    if (layout.value === "split" && file.hunks.length) offset += 29;
+    const plainHeight =
+      (file.header || "No text changes to display.").split("\n").length * 20 +
+      24;
     if (!file.hunks.length) offset += plainHeight;
-    const hunks = file.hunks.map(hunk => {
+    const hunks = file.hunks.map((hunk) => {
       offset += 50;
       const top = offset;
-      const rows = layout.value === 'split' ? splitDiffLines(hunk.lines) : [];
-      for (const row of rows) for (const side of ['left', 'right'] as const) {
-        const line = row[side];
-        const text = (line?.kind === 'meta' ? line.text : line?.text.slice(1) || '').replace(/\t/g, '  ');
-        if (text.length > longest[side].length) longest[side] = text;
-      }
-      const lines = layout.value === 'split' ? rows.map(row => [row.left, row.right]) : hunk.lines.map(line => [line]);
-      lines.forEach((pair, i) => pair.forEach(line => {
-        if (!line) return;
-        width = Math.max(width, line.text.replace(/\t/g, '  ').length);
-        if (line.kind === 'add' || line.kind === 'delete') changes.push({ offset: top + i * rowHeight.value, height: rowHeight.value, kind: line.kind, line: String(line.next || line.old) });
-      }));
+      const rows = layout.value === "split" ? splitDiffLines(hunk.lines) : [];
+      for (const row of rows)
+        for (const side of ["left", "right"] as const) {
+          const line = row[side];
+          const text = (
+            line?.kind === "meta" ? line.text : line?.text.slice(1) || ""
+          ).replace(/\t/g, "  ");
+          if (text.length > longest[side].length) longest[side] = text;
+        }
+      const lines =
+        layout.value === "split"
+          ? rows.map((row) => [row.left, row.right])
+          : hunk.lines.map((line) => [line]);
+      lines.forEach((pair, i) =>
+        pair.forEach((line) => {
+          if (!line) return;
+          width = Math.max(width, line.text.replace(/\t/g, "  ").length);
+          if (line.kind === "add" || line.kind === "delete")
+            changes.push({
+              offset: top + i * rowHeight.value,
+              height: rowHeight.value,
+              kind: line.kind,
+              line: String(line.next || line.old),
+            });
+        }),
+      );
       offset += lines.length * rowHeight.value;
       return { ...hunk, rows, top, count: lines.length };
     });
     return { ...file, hunks, plainHeight };
   });
-  return { files, changes, longest, width: width * fontSize.value * 0.61 + 125 };
+  return {
+    files,
+    changes,
+    longest,
+    width: width * fontSize.value * 0.61 + 125,
+  };
 });
-const files = computed(() => geometry.value.files.map(file => ({ ...file, hunks: file.hunks.map(hunk => {
-  const window = large.value ? diffWindow(hunk.count, hunk.top, scroll.value, viewportHeight.value, rowHeight.value) : { start: 0, end: hunk.count, before: 0, after: 0 };
-  return { ...hunk, window, visibleLines: hunk.lines.slice(window.start, window.end), visibleRows: hunk.rows.slice(window.start, window.end) };
-}) })));
+const files = computed(() =>
+  geometry.value.files.map((file) => ({
+    ...file,
+    hunks: file.hunks.map((hunk) => {
+      const window = large.value
+        ? diffWindow(
+            hunk.count,
+            hunk.top,
+            scroll.value,
+            viewportHeight.value,
+            rowHeight.value,
+          )
+        : { start: 0, end: hunk.count, before: 0, after: 0 };
+      return {
+        ...hunk,
+        window,
+        visibleLines: hunk.lines.slice(window.start, window.end),
+        visibleRows: hunk.rows.slice(window.start, window.end),
+      };
+    }),
+  })),
+);
 let jumpToChangePending = false;
 watch(
-  () => [props.path, props.mode, props.wholeFile, props.text, props.loading] as const,
+  () =>
+    [
+      props.path,
+      props.mode,
+      props.wholeFile,
+      props.text,
+      props.loading,
+    ] as const,
   async (current, previous) => {
-    if (!previous || current.slice(0, 3).some((value, i) => value !== previous[i]))
+    if (
+      !previous ||
+      current.slice(0, 3).some((value, i) => value !== previous[i])
+    )
       jumpToChangePending = !!props.wholeFile;
     if (!jumpToChangePending || props.loading || !props.text) return;
     await nextTick();
     const el = scroller.value;
-    if (!jumpToChangePending || !props.wholeFile || props.loading || !el) return;
+    if (!jumpToChangePending || !props.wholeFile || props.loading || !el)
+      return;
     jumpToChangePending = false;
     // Virtualized changes may be outside the DOM; wrapped rows need measured positions.
-    const row = el.querySelector<HTMLElement>('.diff-line.add, .diff-line.delete');
-    const offset = large.value ? geometry.value.changes[0]?.offset
-      : row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop : undefined;
+    const row = el.querySelector<HTMLElement>(
+      ".diff-line.add, .diff-line.delete",
+    );
+    const offset = large.value
+      ? geometry.value.changes[0]?.offset
+      : row
+        ? row.getBoundingClientRect().top -
+          el.getBoundingClientRect().top +
+          el.scrollTop
+        : undefined;
     if (offset === undefined) return;
     el.scrollTop = Math.max(0, offset - el.clientHeight / 3);
     onScroll();
   },
-  { immediate: true, flush: 'post' },
+  { immediate: true, flush: "post" },
 );
 const selected = ref(new Set<number>());
 const error = ref("");
 watch(
   () => props.text,
   () => {
-    selectionMenu.value?.hidePopover();
+    selectionMenu.value?.close();
     selected.value = new Set();
     error.value = "";
     horizontalScroll.value = { left: 0, right: 0 };
@@ -215,182 +337,383 @@ function context() {
 }
 </script>
 <template>
-  <div class="diff-view" :style="{ '--diff-font-size': `${fontSize}px`, '--diff-row-height': `${rowHeight}px` }" :class="{ 'side-by-side': layout === 'split', 'large-diff': large, 'wrap-lines': wrapLines }">
-    <div class="diff-actions">
-      <div class="diff-layout" role="group" aria-label="Diff layout">
-        <button :aria-pressed="layout === 'unified'" @click="layout = 'unified'">Unified</button>
-        <button :aria-pressed="layout === 'split'" @click="layout = 'split'">Side by side</button>
+  <AppCodeSurface
+    class="diff-view flex flex-col min-h-0 flex-1"
+    :style="{
+      '--diff-font-size': `${fontSize}px`,
+      '--diff-row-height': `${rowHeight}px`,
+    }"
+    :class="{
+      'side-by-side': layout === 'split',
+      'large-diff': large,
+      'wrap-lines': wrapLines,
+    }"
+  >
+    <div
+      class="diff-actions min-h-[35px] flex items-center gap-[8px] py-[6px] px-[12px] text-[#616b7e] text-[9px] [&>span]:flex-1 [&_.small]:text-[9px] [&_.small]:[border-color:transparent] [&_.small]:text-[#8e9ab2] [@media(max-width:1250px)]:[&>span]:hidden [@media(max-width:1100px)]:flex-wrap"
+    >
+      <div
+        class="diff-layout flex shrink-0 border-[1px] border-solid border-[var(--line)] rounded-[5px] p-[2px] [&_button]:py-[3px] [&_button]:px-[7px] [&_button]:text-[10px] [&_button]:rounded-[3px] [&_button[aria-pressed='true']]:bg-[#2a3244] [&_button[aria-pressed='true']]:text-[#c1cfff]"
+        role="group"
+        aria-label="Diff layout"
+      >
+        <AppButton
+          :aria-pressed="layout === 'unified'"
+          @click="layout = 'unified'"
+        >
+          Unified
+        </AppButton>
+        <AppButton :aria-pressed="layout === 'split'" @click="layout = 'split'">
+          Side by side
+        </AppButton>
       </div>
-      <button class="small wrap-toggle" :aria-pressed="wrapLines" @click="wrapLines = !wrapLines">Wrap lines</button>
-      <button v-if="wholeFile !== undefined" class="small" :aria-pressed="wholeFile" @click="emit('update:wholeFile', !wholeFile)">Whole file</button>
-      <div class="diff-font-controls" role="group" aria-label="Diff font size">
-        <button class="small" aria-label="Decrease diff font size" title="Decrease diff font size" :disabled="fontSize <= 9" @click="fontSize--">A−</button>
-        <output aria-label="Diff font size" aria-live="polite">{{ fontSize }}px</output>
-        <button class="small" aria-label="Increase diff font size" title="Increase diff font size" :disabled="fontSize >= 20" @click="fontSize++">A+</button>
+      <AppButton
+        class="small wrap-toggle text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px] [&[aria-pressed='true']]:bg-[#2a3244] [&[aria-pressed='true']]:text-[#c1cfff]"
+        :aria-pressed="wrapLines"
+        @click="wrapLines = !wrapLines"
+      >
+        Wrap lines
+      </AppButton>
+      <AppButton
+        v-if="wholeFile !== undefined"
+        class="small text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px]"
+        :aria-pressed="wholeFile"
+        @click="emit('update:wholeFile', !wholeFile)"
+      >
+        Whole file
+      </AppButton>
+      <div
+        class="diff-font-controls flex items-center shrink-0 gap-[3px] [&_output]:min-w-[28px] [&_output]:text-center [&_output]:text-[10px]"
+        role="group"
+        aria-label="Diff font size"
+      >
+        <AppButton
+          class="small text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px]"
+          aria-label="Decrease diff font size"
+          title="Decrease diff font size"
+          :disabled="fontSize <= 9"
+          @click="fontSize--"
+        >
+          A−
+        </AppButton>
+        <output aria-label="Diff font size" aria-live="polite"
+          >{{ fontSize }}px</output
+        >
+        <AppButton
+          class="small text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px]"
+          aria-label="Increase diff font size"
+          title="Increase diff font size"
+          :disabled="fontSize >= 20"
+          @click="fontSize++"
+        >
+          A+
+        </AppButton>
       </div>
-      <LoaderCircle class="spin diff-loading" :class="{ visible: loading }" :size="13" :aria-hidden="!loading" aria-label="Refreshing diff" />
+      <LoaderCircle
+        class="spin diff-loading animate-spin [visibility:hidden] shrink-0 [&.visible]:[visibility:visible]"
+        :class="{ visible: loading }"
+        :size="13"
+        :aria-hidden="!loading"
+        aria-label="Refreshing diff"
+      />
       <span>{{
         selected.size
           ? `${selected.size} lines selected`
           : "Select changed lines to stage or discuss"
       }}</span
-      ><button v-if="editable && selected.size" class="small" :disabled="disabled || loading" @click="stage()">
+      ><AppButton
+        v-if="editable && selected.size"
+        class="small text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px]"
+        :disabled="disabled || loading"
+        @click="stage()"
+      >
         <Check :size="13" />{{
           mode === "staged" ? "Unstage" : "Stage"
         }}
-        selection</button
-      ><button class="small" @click="context">
+        selection</AppButton
+      ><AppButton
+        class="small text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px]"
+        @click="context"
+      >
         <MessageSquarePlus :size="14" />Add to chat
-      </button>
+      </AppButton>
     </div>
-    <div v-if="error" class="inline-error">{{ error }}</div>
-    <div class="diff-body">
-    <div class="diff-main">
-    <div v-if="loading && !text" class="diff-pending" role="status"><LoaderCircle :size="22" class="spin" /><span>Loading changes...</span></div>
-    <div ref="scroller" class="diff-scroll" @contextmenu="openSelectionMenu" @scroll="onScroll">
-      <div class="diff-content" :style="large && layout !== 'split' ? { minWidth: `${geometry.width}px` } : undefined">
-      <template v-for="(file, fileIndex) in files" :key="fileIndex">
-        <div v-if="files.length > 1" class="diff-file-label">{{ file.header.split('\n')[0] }}</div>
-        <div v-if="layout === 'split' && file.hunks.length" class="split-labels"><span>Original</span><span>Modified</span></div>
-        <section v-for="hunk in file.hunks" :key="hunk.start" class="hunk" :data-file="props.path || file.header.split('\n')[0]">
-          <div class="hunk-header">
-            <code>{{ hunk.header }}</code
-            ><button
-              v-if="editable"
-              class="small"
-              :disabled="disabled || loading"
-              @click="
-                stage(
-                  hunk.lines
-                    .filter((l) => l.kind === 'add' || l.kind === 'delete')
-                    .map((l) => l.index),
-                )
-              "
-            >
-              {{ mode === "staged" ? "Unstage" : "Stage" }} hunk
-            </button>
-          </div>
-          <div v-if="hunk.window.before" :style="{ height: `${hunk.window.before}px` }" aria-hidden="true" />
-          <div v-if="layout === 'split'" class="split-lines">
-            <div v-for="(row, rowIndex) in hunk.visibleRows" :key="rowIndex + hunk.window.start" class="split-row">
-              <div v-for="side in (['left', 'right'] as const)" :key="side" class="diff-line split-cell" :class="[row[side]?.kind, { selected: row[side] && selected.has(row[side]!.index), 'empty-cell': !row[side] }]"
-                :scrollLeft="wrapLines ? 0 : horizontalScroll[side]" @scroll="scrollSide(side, $event)">
-                <div class="split-line-content" :style="!wrapLines ? { minWidth: `${horizontalWidth[side]}px` } : undefined">
-                <template v-if="row[side]">
-                  <button v-if="row[side]!.kind === 'add' || row[side]!.kind === 'delete'" class="line-select"
-                    :aria-label="`Select ${side === 'left' ? 'old' : 'new'} line ${row[side]!.old || row[side]!.next}`"
-                    :aria-pressed="selected.has(row[side]!.index)" @click="toggle(row[side]!.index)">
-                    <Check v-if="selected.has(row[side]!.index)" :size="11" /><span v-else>&middot;</span>
-                  </button><span v-else class="line-select" />
-                  <span class="line-number">{{ side === 'left' ? row[side]!.old : row[side]!.next }}</span>
-                  <span class="line-sign">{{ row[side]!.kind === 'add' ? '+' : row[side]!.kind === 'delete' ? '\u2212' : '' }}</span>
-                  <code><template v-if="syntax[row[side]!.index]?.[side === 'left' ? 'old' : 'next']"><span v-for="(token, i) in syntax[row[side]!.index]![side === 'left' ? 'old' : 'next']" :key="i" :class="token.classes">{{ token.text }}</span></template><template v-else>{{ row[side]!.kind === 'meta' ? row[side]!.text : row[side]!.text.slice(1) }}</template></code>
-                </template>
-                </div>
-              </div>
-            </div>
-          </div>
-          <template v-else>
-          <div
-            v-for="line in hunk.visibleLines"
-            :key="line.index"
-            class="diff-line"
-            :class="[line.kind, { selected: selected.has(line.index) }]"
+    <div
+      v-if="error"
+      class="inline-error text-[#e4a6b0] bg-[#472b343f] py-[10px] px-[12px] text-[11px] leading-[1.7] whitespace-pre-wrap [overflow-wrap:anywhere]"
+    >
+      {{ error }}
+    </div>
+    <div class="diff-body flex min-h-0 flex-1 [&_.diff-scroll]:min-w-0">
+      <div class="diff-main flex flex-col flex-1 min-w-0 min-h-0 relative">
+        <div
+          v-if="loading && !text"
+          class="diff-pending absolute inset-0 z-[1] flex flex-col items-center justify-center gap-[10px] bg-[#171c26] text-[#96a3ba] pointer-events-none"
+          role="status"
+        >
+          <LoaderCircle :size="22" class="spin animate-spin" /><span
+            >Loading changes...</span
           >
-            <button
-              v-if="line.kind === 'add' || line.kind === 'delete'"
-              class="line-select"
-              :aria-label="`Select changed line ${line.next || line.old}`"
-              :aria-pressed="selected.has(line.index)"
-              @click="toggle(line.index)"
-            >
-              <Check v-if="selected.has(line.index)" :size="11" /><span v-else
-                >·</span
-              ></button
-            ><span v-else class="line-select" />
-            <span class="line-number">{{ line.old }}</span
-            ><span class="line-number">{{ line.next }}</span
-            ><span class="line-sign">{{
-              line.kind === "add" ? "+" : line.kind === "delete" ? "−" : ""
-            }}</span
-            ><code><template v-if="syntax[line.index]?.[line.kind === 'delete' ? 'old' : 'next']"><span v-for="(token, i) in syntax[line.index]![line.kind === 'delete' ? 'old' : 'next']" :key="i" :class="token.classes">{{ token.text }}</span></template><template v-else>{{
-              line.kind === "meta" ? line.text : line.text.slice(1)
-            }}</template></code>
+        </div>
+        <div
+          ref="scroller"
+          class="diff-scroll overflow-auto flex-1 min-h-0 pb-[30px] [overflow-anchor:none] [.side-by-side_&]:overflow-x-hidden"
+          @contextmenu="openSelectionMenu"
+          @scroll="onScroll"
+        >
+          <div
+            class="diff-content"
+            :style="
+              large && layout !== 'split'
+                ? { minWidth: `${geometry.width}px` }
+                : undefined
+            "
+          >
+            <template v-for="(file, fileIndex) in files" :key="fileIndex">
+              <div
+                v-if="files.length > 1"
+                class="diff-file-label [.large-diff_&]:h-[32px] [.large-diff_&]:whitespace-nowrap py-[9px] px-[12px] text-[#bac7e0] text-[11px] bg-[#1b2030] [overflow-wrap:anywhere]"
+              >
+                {{ file.header.split("\n")[0] }}
+              </div>
+              <div
+                v-if="layout === 'split' && file.hunks.length"
+                class="split-labels [.large-diff_&]:h-[29px] grid grid-cols-[minmax(0,_1fr)_minmax(0,_1fr)] bg-[#171c26] border-b-[1px] border-solid border-b-[var(--line)] text-[#8998b4] text-[10px] [&_span]:py-[7px] [&_span]:px-[15px] [&_span:first-child]:border-r-[1px] [&_span:first-child]:border-solid [&_span:first-child]:border-r-[#353d4d] [.wrap-lines_&]:min-w-0"
+              >
+                <span>Original</span><span>Modified</span>
+              </div>
+              <section
+                v-for="hunk in file.hunks"
+                :key="hunk.start"
+                class="hunk min-w-full w-max [.side-by-side_&]:w-full [.side-by-side_&]:min-w-0 [.wrap-lines_&]:w-full [.wrap-lines_&]:min-w-0"
+                :data-file="props.path || file.header.split('\n')[0]"
+              >
+                <div
+                  class="hunk-header min-h-[42px] flex items-center justify-between gap-[15px] py-[7px] px-[12px] bg-[#202736] text-[#8093bc] text-[10px] border-t-[1px] border-solid border-t-[#2a3346] border-b-[1px] border-b-[#2a3346] mt-[8px] mx-0 mb-0 [&_button]:text-[9px] [&_button]:bg-[#293348] [&_button]:text-[#a1b4dd] [&_button]:[border-color:#34425b] [.large-diff_&]:h-[42px]"
+                >
+                  <code
+                    class="[:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace]"
+                    >{{ hunk.header }}</code
+                  ><AppButton
+                    v-if="editable"
+                    class="small text-[11px] py-[4px] px-[7px] [border-color:#30343f] rounded-[4px]"
+                    :disabled="disabled || loading"
+                    @click="
+                      stage(
+                        hunk.lines
+                          .filter(
+                            (l) => l.kind === 'add' || l.kind === 'delete',
+                          )
+                          .map((l) => l.index),
+                      )
+                    "
+                  >
+                    {{ mode === "staged" ? "Unstage" : "Stage" }} hunk
+                  </AppButton>
+                </div>
+                <div
+                  v-if="hunk.window.before"
+                  :style="{ height: `${hunk.window.before}px` }"
+                  aria-hidden="true"
+                />
+                <div v-if="layout === 'split'" class="split-lines">
+                  <div
+                    v-for="(row, rowIndex) in hunk.visibleRows"
+                    :key="rowIndex + hunk.window.start"
+                    class="split-row grid grid-cols-[minmax(0,_1fr)_minmax(0,_1fr)]"
+                  >
+                    <div
+                      v-for="side in ['left', 'right'] as const"
+                      :key="side"
+                      class="diff-line split-cell block items-stretch min-h-[var(--diff-row-height)] text-[length:var(--diff-font-size)] leading-[var(--diff-row-height)] whitespace-pre min-w-0 w-full [&_code]:pr-[12px] [&_code]:text-[#b5bdce] [&_code]:[tab-size:2] [&.add]:bg-[#23834b40] [&.add_code]:text-[#c0f0ce] [&.add_.line-sign]:text-[#87e5a6] [&.add_.line-number]:bg-[#23834b50] [&.add_.line-number]:text-[#9cdbaf] [&.delete]:bg-[#c7435140] [&.delete_code]:text-[#ffd0d5] [&.delete_.line-sign]:text-[#ff98a3] [&.delete_.line-number]:bg-[#c7435150] [&.delete_.line-number]:text-[#f1a6af] [&.selected]:bg-[#364c7655] [&.selected]:shadow-[inset_2px_0_#8ea6e6] [&.meta]:text-[#6b7283] [.large-diff_&]:h-[var(--diff-row-height)] [.large-diff_&]:min-h-[var(--diff-row-height)] [.large-diff_&_code]:whitespace-pre [.large-diff_&_code]:[overflow-wrap:normal] [&.delete_.diff-inline-change]:text-[#fff0f2] [&.delete_.diff-inline-change]:bg-[#b83e53] [&.delete_.diff-inline-change]:rounded-[2px] [&.delete_.diff-inline-change]:shadow-[inset_0_-1px_#ff8c9d] [&.add_.diff-inline-change]:text-[#ecfff1] [&.add_.diff-inline-change]:bg-[#237443] [&.add_.diff-inline-change]:rounded-[2px] [&.add_.diff-inline-change]:shadow-[inset_0_-1px_#79dfa0] overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&:first-child]:border-r-[1px] [&:first-child]:border-solid [&:first-child]:border-r-[#353d4d] [&_code]:min-w-0 [&_code]:flex-1 [&_code]:whitespace-pre [.wrap-lines_&]:w-full [.wrap-lines_&]:min-w-0 [.wrap-lines_&_code]:min-w-0 [.wrap-lines_&_code]:flex-1 [.wrap-lines_&_code]:whitespace-pre-wrap [.wrap-lines_&_code]:[overflow-wrap:anywhere] [&.empty-cell]:bg-[#ffffff03]"
+                      :class="[
+                        row[side]?.kind,
+                        {
+                          selected: row[side] && selected.has(row[side]!.index),
+                          'empty-cell': !row[side],
+                        },
+                      ]"
+                      :scrollLeft="wrapLines ? 0 : horizontalScroll[side]"
+                      @scroll="scrollSide(side, $event)"
+                    >
+                      <div
+                        class="split-line-content flex min-h-[var(--diff-row-height)] min-w-full w-max [.wrap-lines_&]:w-full [.wrap-lines_&]:min-w-0"
+                        :style="
+                          !wrapLines
+                            ? { minWidth: `${horizontalWidth[side]}px` }
+                            : undefined
+                        "
+                      >
+                        <template v-if="row[side]">
+                          <AppButton
+                            v-if="
+                              row[side]!.kind === 'add' ||
+                              row[side]!.kind === 'delete'
+                            "
+                            class="line-select flex justify-center items-center w-[20px] min-w-[20px] max-w-[20px] min-h-[var(--diff-row-height)] rounded-none p-0 text-[15px] opacity-[0.5] text-[#8998b6] leading-[1] hover:opacity-[1]"
+                            :aria-label="`Select ${side === 'left' ? 'old' : 'new'} line ${row[side]!.old || row[side]!.next}`"
+                            :aria-pressed="selected.has(row[side]!.index)"
+                            @click="toggle(row[side]!.index)"
+                          >
+                            <Check
+                              v-if="selected.has(row[side]!.index)"
+                              :size="11"
+                            /><span v-else>&middot;</span></AppButton
+                          ><span
+                            v-else
+                            class="line-select flex justify-center items-center w-[20px] min-w-[20px] max-w-[20px] min-h-[var(--diff-row-height)] rounded-none p-0 text-[15px] opacity-[0.5] text-[#8998b6] leading-[1] hover:opacity-[1]"
+                          />
+                          <span
+                            class="line-number w-[34px] shrink-0 text-right pr-[8px] text-[#4f596a] select-none text-[10px]"
+                            >{{
+                              side === "left" ? row[side]!.old : row[side]!.next
+                            }}</span
+                          >
+                          <span
+                            class="line-sign w-[20px] shrink-0 text-center text-[#6f7d91] select-none"
+                            >{{
+                              row[side]!.kind === "add"
+                                ? "+"
+                                : row[side]!.kind === "delete"
+                                  ? "\u2212"
+                                  : ""
+                            }}</span
+                          >
+                          <code
+                            class="[:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace]"
+                            ><template
+                              v-if="
+                                syntax[row[side]!.index]?.[
+                                  side === 'left' ? 'old' : 'next'
+                                ]
+                              "
+                              ><span
+                                v-for="(token, i) in syntax[row[side]!.index]![
+                                  side === 'left' ? 'old' : 'next'
+                                ]"
+                                :key="i"
+                                :class="token.classes"
+                                >{{ token.text }}</span
+                              ></template
+                            ><template v-else>{{
+                              row[side]!.kind === "meta"
+                                ? row[side]!.text
+                                : row[side]!.text.slice(1)
+                            }}</template></code
+                          >
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <template v-else>
+                  <div
+                    v-for="line in hunk.visibleLines"
+                    :key="line.index"
+                    class="diff-line flex items-stretch min-h-[var(--diff-row-height)] text-[length:var(--diff-font-size)] leading-[var(--diff-row-height)] whitespace-pre min-w-full w-max [&_code]:pr-[25px] [&_code]:text-[#b5bdce] [&_code]:[tab-size:2] [&.add]:bg-[#23834b40] [&.add_code]:text-[#c0f0ce] [&.add_.line-sign]:text-[#87e5a6] [&.add_.line-number]:bg-[#23834b50] [&.add_.line-number]:text-[#9cdbaf] [&.delete]:bg-[#c7435140] [&.delete_code]:text-[#ffd0d5] [&.delete_.line-sign]:text-[#ff98a3] [&.delete_.line-number]:bg-[#c7435150] [&.delete_.line-number]:text-[#f1a6af] [&.selected]:bg-[#364c7655] [&.selected]:shadow-[inset_2px_0_#8ea6e6] [&.meta]:text-[#6b7283] [.large-diff_&]:h-[var(--diff-row-height)] [.large-diff_&]:min-h-[var(--diff-row-height)] [&.delete_.diff-inline-change]:text-[#fff0f2] [&.delete_.diff-inline-change]:bg-[#b83e53] [&.delete_.diff-inline-change]:rounded-[2px] [&.delete_.diff-inline-change]:shadow-[inset_0_-1px_#ff8c9d] [&.add_.diff-inline-change]:text-[#ecfff1] [&.add_.diff-inline-change]:bg-[#237443] [&.add_.diff-inline-change]:rounded-[2px] [&.add_.diff-inline-change]:shadow-[inset_0_-1px_#79dfa0] [.wrap-lines_&]:w-full [.wrap-lines_&]:min-w-0 [.wrap-lines_&_code]:min-w-0 [.wrap-lines_&_code]:flex-1 [.wrap-lines_&_code]:whitespace-pre-wrap [.wrap-lines_&_code]:[overflow-wrap:anywhere]"
+                    :class="[line.kind, { selected: selected.has(line.index) }]"
+                  >
+                    <AppButton
+                      v-if="line.kind === 'add' || line.kind === 'delete'"
+                      class="line-select flex justify-center items-center w-[20px] min-w-[20px] max-w-[20px] min-h-[var(--diff-row-height)] rounded-none p-0 text-[15px] opacity-[0.5] text-[#8998b6] leading-[1] hover:opacity-[1]"
+                      :aria-label="`Select changed line ${line.next || line.old}`"
+                      :aria-pressed="selected.has(line.index)"
+                      @click="toggle(line.index)"
+                    >
+                      <Check v-if="selected.has(line.index)" :size="11" /><span
+                        v-else
+                        >·</span
+                      ></AppButton
+                    ><span
+                      v-else
+                      class="line-select flex justify-center items-center w-[20px] min-w-[20px] max-w-[20px] min-h-[var(--diff-row-height)] rounded-none p-0 text-[15px] opacity-[0.5] text-[#8998b6] leading-[1] hover:opacity-[1]"
+                    />
+                    <span
+                      class="line-number w-[34px] shrink-0 text-right pr-[8px] text-[#4f596a] select-none text-[10px]"
+                      >{{ line.old }}</span
+                    ><span
+                      class="line-number w-[34px] shrink-0 text-right pr-[8px] text-[#4f596a] select-none text-[10px]"
+                      >{{ line.next }}</span
+                    ><span
+                      class="line-sign w-[20px] shrink-0 text-center text-[#6f7d91] select-none"
+                      >{{
+                        line.kind === "add"
+                          ? "+"
+                          : line.kind === "delete"
+                            ? "−"
+                            : ""
+                      }}</span
+                    ><code
+                      class="[:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace]"
+                      ><template
+                        v-if="
+                          syntax[line.index]?.[
+                            line.kind === 'delete' ? 'old' : 'next'
+                          ]
+                        "
+                        ><span
+                          v-for="(token, i) in syntax[line.index]![
+                            line.kind === 'delete' ? 'old' : 'next'
+                          ]"
+                          :key="i"
+                          :class="token.classes"
+                          >{{ token.text }}</span
+                        ></template
+                      ><template v-else>{{
+                        line.kind === "meta" ? line.text : line.text.slice(1)
+                      }}</template></code
+                    >
+                  </div>
+                </template>
+                <div
+                  v-if="hunk.window.after"
+                  :style="{ height: `${hunk.window.after}px` }"
+                  aria-hidden="true"
+                />
+              </section>
+              <pre
+                v-if="!file.hunks.length"
+                class="plain-output text-[11px] py-[15px] px-[18px] text-[#9ba5bb] [.large-diff_&]:m-0 [.large-diff_&]:p-[12px] [.large-diff_&]:leading-[20px] [.large-diff_&]:whitespace-pre [:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace] [:where(&)]:whitespace-pre-wrap [:where(&)]:[word-break:break-word] [:where(&)]:leading-[1.7]"
+                :style="large ? { height: `${file.plainHeight}px` } : undefined"
+                >{{
+                  file.header ||
+                  (loading
+                    ? "Loading changes..."
+                    : "No text changes to display.")
+                }}</pre>
+            </template>
           </div>
-          </template>
-          <div v-if="hunk.window.after" :style="{ height: `${hunk.window.after}px` }" aria-hidden="true" />
-        </section>
-        <pre v-if="!file.hunks.length" class="plain-output" :style="large ? { height: `${file.plainHeight}px` } : undefined">{{ file.header || (loading ? "Loading changes..." : "No text changes to display.") }}</pre>
-      </template>
+        </div>
+        <div
+          v-if="layout === 'split' && !wrapLines"
+          class="split-scrollbars grid grid-cols-[minmax(0,_1fr)_minmax(0,_1fr)] shrink-0"
+        >
+          <div
+            v-for="side in ['left', 'right'] as const"
+            :key="side"
+            class="side-scrollbar [overflow-x:scroll] overflow-y-hidden min-w-0 h-[16px] [&:first-child]:border-r-[1px] [&:first-child]:border-solid [&:first-child]:border-r-[#353d4d] [&_code]:block [&_code]:[box-sizing:content-box] [&_code]:w-max [&_code]:[min-width:calc(100%_-_86px)] [&_code]:pl-[74px] [&_code]:pr-[12px] [&_code]:h-[1px] [&_code]:text-[length:var(--diff-font-size)] [&_code]:whitespace-pre [&_code]:[visibility:hidden]"
+            tabindex="0"
+            role="region"
+            :data-scroll-side="side"
+            :aria-label="`Scroll ${side === 'left' ? 'original' : 'modified'} horizontally`"
+            :scrollLeft="horizontalScroll[side]"
+            @scroll="scrollSide(side, $event)"
+          >
+            <code
+              class="[:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace]"
+              aria-hidden="true"
+              >{{ geometry.longest[side] }}</code
+            >
+          </div>
+        </div>
       </div>
+      <DiffOverview
+        v-if="wholeFile"
+        :scroller="scroller"
+        :revision="[text, layout, wrapLines, fontSize]"
+        :changes="large ? geometry.changes : undefined"
+      />
     </div>
-    <div v-if="layout === 'split' && !wrapLines" class="split-scrollbars">
-      <div v-for="side in (['left', 'right'] as const)" :key="side" class="side-scrollbar" tabindex="0" role="region"
-        :data-scroll-side="side"
-        :aria-label="`Scroll ${side === 'left' ? 'original' : 'modified'} horizontally`"
-        :scrollLeft="horizontalScroll[side]" @scroll="scrollSide(side, $event)">
-        <code aria-hidden="true">{{ geometry.longest[side] }}</code>
-      </div>
-    </div>
-    </div>
-    <DiffOverview v-if="wholeFile" :scroller="scroller" :revision="[text, layout, wrapLines, fontSize]" :changes="large ? geometry.changes : undefined" />
-    </div>
-    <div ref="selectionMenu" popover="auto" role="menu" aria-label="Selected code actions" class="selection-menu" @contextmenu.prevent>
-      <button role="menuitem" @click="editInChat"><MessageSquarePlus :size="14" />Ask T3 to edit selection</button>
-    </div>
-  </div>
+    <ContextMenu ref="selectionMenu" />
+  </AppCodeSurface>
 </template>
-
-<style scoped>
-.diff-line { font-size: var(--diff-font-size); line-height: var(--diff-row-height); min-height: var(--diff-row-height); }
-.line-select { min-height: var(--diff-row-height); }
-.diff-font-controls { display: flex; align-items: center; flex-shrink: 0; gap: 3px; }
-.diff-font-controls output { min-width: 28px; text-align: center; font-size: 10px; }
-/* Fixed row geometry keeps large files stable as offscreen rows are recycled. */
-.large-diff .diff-line { height: var(--diff-row-height); min-height: var(--diff-row-height); }
-.large-diff .split-cell code { white-space: pre; overflow-wrap: normal; }
-.large-diff .hunk-header { height: 42px; }
-.large-diff .diff-file-label { height: 32px; white-space: nowrap; }
-.large-diff .split-labels { height: 29px; }
-.large-diff .plain-output { margin: 0; padding: 12px; line-height: 20px; white-space: pre; }
-
-.selection-menu { position: fixed; inset: auto; margin: 0; padding: 4px; background: #1b202b; color: #d3dffa; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 28px #0008; }
-.selection-menu button { padding: 8px 10px; gap: 8px; font-size: 11px; }
-.diff-body { display: flex; min-height: 0; flex: 1; }
-.diff-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.diff-body .diff-scroll { min-width: 0; }
-.diff-line.delete .diff-inline-change { color: #fff0f2; background: #b83e53; border-radius: 2px; box-shadow: inset 0 -1px #ff8c9d; }
-.diff-line.add .diff-inline-change { color: #ecfff1; background: #237443; border-radius: 2px; box-shadow: inset 0 -1px #79dfa0; }
-.diff-loading { visibility: hidden; flex-shrink: 0; }
-.diff-loading.visible { visibility: visible; }
-.diff-layout { display: flex; flex-shrink: 0; border: 1px solid var(--line); border-radius: 5px; padding: 2px; }
-.diff-layout button { padding: 3px 7px; font-size: 10px; border-radius: 3px; }
-.diff-layout button[aria-pressed="true"] { background: #2a3244; color: #c1cfff; }
-.side-by-side .diff-scroll { overflow-x: hidden; }
-.side-by-side .hunk { width: 100%; min-width: 0; }
-.split-row, .split-labels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.split-labels { background: #171c26; border-bottom: 1px solid var(--line); color: #8998b4; font-size: 10px; }
-.split-labels span { padding: 7px 15px; }
-.split-cell { display: block; min-width: 0; width: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.split-cell::-webkit-scrollbar { display: none; }
-.split-line-content { display: flex; min-height: var(--diff-row-height); min-width: 100%; width: max-content; }
-.split-scrollbars { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); flex-shrink: 0; }
-.side-scrollbar { overflow-x: scroll; overflow-y: hidden; min-width: 0; height: 16px; }
-.side-scrollbar:first-child { border-right: 1px solid #353d4d; }
-.side-scrollbar code { display: block; box-sizing: content-box; width: max-content; min-width: calc(100% - 86px); padding-left: 74px; padding-right: 12px; height: 1px; font-size: var(--diff-font-size); white-space: pre; visibility: hidden; }
-.split-cell:first-child, .split-labels span:first-child { border-right: 1px solid #353d4d; }
-.split-cell code { min-width: 0; flex: 1; white-space: pre; padding-right: 12px; }
-.wrap-toggle[aria-pressed="true"] { background: #2a3244; color: #c1cfff; }
-.wrap-lines .hunk, .wrap-lines .diff-line { width: 100%; min-width: 0; }
-.wrap-lines .split-labels { min-width: 0; }
-.wrap-lines .split-line-content { width: 100%; min-width: 0; }
-.wrap-lines .diff-line code { min-width: 0; flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
-.empty-cell { background: #ffffff03; }
-.diff-file-label { padding: 9px 12px; color: #bac7e0; font-size: 11px; background: #1b2030; overflow-wrap: anywhere; }
-@media (max-width: 1100px) { .diff-actions { flex-wrap: wrap; } }
-</style>
-
-<style scoped>
-.diff-main { position: relative; }
-.diff-pending { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: #171c26; color: #96a3ba; pointer-events: none; }
-</style>

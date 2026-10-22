@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ui-menu: #1b202b;
+  --color-ui-hover: #303b50;
+  --color-ui-selected: #293348;
+  --color-ui-border: #35405a;
+  --color-ui-text: #d7deed;
+  --color-ui-muted: #8e9bb4;
+  --color-ui-accent: #a7b6ff;
+}

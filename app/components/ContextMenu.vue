@@ -1,62 +1,91 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
-import type { ContextMenuItem as Item } from '~/lib/context-menu';
+import { ref } from "vue";
+import {
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuPortal,
+  ContextMenuRoot,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "reka-ui";
+import type { ContextMenuItem as Item } from "~/lib/context-menu";
+
 const emit = defineEmits<{ error: [message: string] }>();
-const element = ref<HTMLDivElement>();
-const items = ref<Item[]>([]);
+const expanded = ref(false),
+  items = ref<Item[]>([]);
+const point = ref({ left: "0px", top: "0px" });
 let trigger: HTMLElement | undefined;
-async function open(event: MouseEvent | KeyboardEvent, actions: Item[]) {
+
+function open(event: MouseEvent | KeyboardEvent, actions: Item[]) {
   event.preventDefault();
   trigger = event.currentTarget as HTMLElement;
-  if (!trigger.matches('button, [tabindex]')) trigger = trigger.querySelector<HTMLElement>('button, [tabindex]') || trigger;
-  items.value = actions;
+  if (!trigger.matches("button, [tabindex]"))
+    trigger =
+      trigger.querySelector<HTMLElement>("button, [tabindex]") || trigger;
   const rect = trigger.getBoundingClientRect();
   const mouse = event instanceof MouseEvent && (event.clientX || event.clientY);
-  const x = mouse ? event.clientX : rect.left;
-  const y = mouse ? event.clientY : rect.bottom;
-  await nextTick();
-  const menu = element.value;
-  if (!menu) return;
-  menu.showPopover();
-  menu.style.left = `${Math.max(4, Math.min(x, innerWidth - menu.offsetWidth - 4))}px`;
-  menu.style.top = `${Math.max(4, Math.min(y, innerHeight - menu.offsetHeight - 4))}px`;
-  menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  point.value = {
+    left: `${mouse ? event.clientX : rect.left}px`,
+    top: `${mouse ? event.clientY : rect.bottom}px`,
+  };
+  items.value = actions;
+  expanded.value = true;
 }
-function close() { element.value?.hidePopover(); }
+function close() {
+  expanded.value = false;
+}
 async function choose(item: Item) {
   if (item.disabled) return;
   close();
-  trigger?.focus({ preventScroll: true });
-  try { await item.run(); } catch (error) { emit('error', String(error)); }
-}
-function navigate(event: KeyboardEvent) {
-  if (event.key === 'Escape' || event.key === 'Tab') {
-    event.preventDefault(); close(); trigger?.focus({ preventScroll: true }); return;
+  try {
+    await item.run();
+  } catch (error) {
+    emit("error", String(error));
   }
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-  event.preventDefault();
-  const buttons = [...element.value!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-  const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-  const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
-    : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
-  buttons[index]?.focus();
 }
 defineExpose({ open, close });
 </script>
+
 <template>
-  <div ref="element" popover="auto" role="menu" aria-label="Sidebar actions" class="sidebar-context-menu" @keydown="navigate" @contextmenu.prevent>
-    <template v-for="item in items" :key="item.label">
-      <div v-if="item.separatorBefore" role="separator" class="menu-separator" />
-      <button role="menuitem" :disabled="item.disabled" :title="item.disabledReason" :class="{ 'destructive-action': item.danger }" @click="choose(item)">{{ item.label }}<small v-if="item.disabled && item.disabledReason">{{ item.disabledReason }}</small></button>
-    </template>
-  </div>
+  <ContextMenuRoot v-model:open="expanded" :modal="false">
+    <ContextMenuTrigger as-child
+      ><span
+        class="pointer-events-none fixed size-0"
+        :style="point"
+        aria-hidden="true"
+    /></ContextMenuTrigger>
+    <ContextMenuPortal>
+      <ContextMenuContent
+        aria-label="Actions"
+        :collision-padding="8"
+        :side-offset="0"
+        class="sidebar-context-menu z-[160] min-w-[190px] max-w-[calc(100vw-16px)] max-h-(--reka-context-menu-content-available-height) overflow-auto rounded-[6px] border border-ui-border bg-ui-menu p-[4px] text-[11px] text-ui-text shadow-xl"
+        @close-auto-focus.prevent="trigger?.focus({ preventScroll: true })"
+      >
+        <template v-for="item in items" :key="item.label">
+          <ContextMenuSeparator
+            v-if="item.separatorBefore"
+            class="mx-[6px] my-[4px] h-px bg-ui-border"
+          />
+          <ContextMenuItem
+            :disabled="item.disabled"
+            :text-value="item.label"
+            :title="item.disabledReason"
+            class="flex cursor-pointer flex-col gap-[3px] rounded-[4px] px-[10px] py-[7px] outline-none data-[highlighted]:bg-ui-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-40"
+            :class="{
+              'text-[#ef9ca7] data-[highlighted]:bg-[#c743511a]': item.danger,
+            }"
+            @select="choose(item)"
+          >
+            {{ item.label }}
+            <small
+              v-if="item.disabled && item.disabledReason"
+              class="max-w-[240px] whitespace-normal text-[10px]"
+              >{{ item.disabledReason }}</small
+            >
+          </ContextMenuItem>
+        </template>
+      </ContextMenuContent>
+    </ContextMenuPortal>
+  </ContextMenuRoot>
 </template>
-<style scoped>
-.sidebar-context-menu { position: fixed; inset: auto; margin: 0; padding: 4px; min-width: 190px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px); overflow: auto; background: #1b202b; color: #d3dffa; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 28px #0008; }
-button { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; justify-content: flex-start; padding: 7px 10px; font-size: 11px; border-radius: 3px; }
-button:focus-visible { outline: 1px solid #8ca5e7; outline-offset: -1px; background: #2a3244; }
-.menu-separator { height: 1px; margin: 4px 6px; background: var(--line); }
-button.destructive-action { color: #ef9ca7; }
-button.destructive-action:hover:not(:disabled), button.destructive-action:focus-visible { color: #ffb5bf; background: #c743511a; }
-small { font-size: 10px; font-weight: 400; white-space: normal; max-width: 240px; text-align: left; }
-</style>

@@ -1,45 +1,19 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { renderMarkdown } from '~/lib/markdown';
+import { computed } from "vue";
+import { renderMarkdown } from "~/lib/markdown";
 const props = defineProps<{ text: string; streaming?: boolean }>();
 const html = computed(() => renderMarkdown(props.text));
 </script>
 
 <template>
-  <div class="chat-markdown">
+  <AppCodeSurface
+    class="chat-markdown [&_.badge]:text-[9px] [&_.badge]:bg-[#242831] [&_.badge]:text-[#a1a8ba] [&_.badge]:py-[3px] [&_.badge]:px-[5px] [&_.badge]:rounded-[4px] [&_.graph-line.last]:bottom-[50%] text-[13px] leading-[1.7] text-[#d4d7df] [overflow-wrap:anywhere] [&_p]:mt-0 [&_p]:mx-0 [&_p]:mb-[12px] [&_ul]:mt-0 [&_ul]:mx-0 [&_ul]:mb-[12px] [&_ol]:mt-0 [&_ol]:mx-0 [&_ol]:mb-[12px] [&_blockquote]:mt-0 [&_blockquote]:mx-0 [&_blockquote]:mb-[12px] [&_pre]:mt-0 [&_pre]:mx-0 [&_pre]:mb-[12px] [&_p]:text-[inherit] [&_p]:leading-[inherit] [&_div>:last-child]:mb-0 [&_h1]:mt-[18px] [&_h1]:mx-0 [&_h1]:mb-[8px] [&_h1]:text-[#e0e6f4] [&_h1]:leading-[1.4] [&_h2]:mt-[18px] [&_h2]:mx-0 [&_h2]:mb-[8px] [&_h2]:text-[#e0e6f4] [&_h2]:leading-[1.4] [&_h3]:mt-[18px] [&_h3]:mx-0 [&_h3]:mb-[8px] [&_h3]:text-[#e0e6f4] [&_h3]:leading-[1.4] [&_h4]:mt-[18px] [&_h4]:mx-0 [&_h4]:mb-[8px] [&_h4]:text-[#e0e6f4] [&_h4]:leading-[1.4] [&_h5]:mt-[18px] [&_h5]:mx-0 [&_h5]:mb-[8px] [&_h5]:text-[#e0e6f4] [&_h5]:leading-[1.4] [&_h6]:mt-[18px] [&_h6]:mx-0 [&_h6]:mb-[8px] [&_h6]:text-[#e0e6f4] [&_h6]:leading-[1.4] [&_h1]:text-[20px] [&_h2]:text-[17px] [&_h3]:text-[14px] [&_h4]:text-[12px] [&_h5]:text-[12px] [&_h6]:text-[12px] [&_div>:first-child]:mt-0 [&_ul]:pl-[22px] [&_ol]:pl-[22px] [&_li_+_li]:mt-[4px] [&_li>ul]:mt-[4px] [&_li>ol]:mt-[4px] [&_strong]:font-semibold [&_strong]:text-[#e7e9ef] [&_a]:text-[#a7b6ff] [&_a]:underline [&_a]:[text-underline-offset:2px] [&_a:hover]:text-[#d2dbff] [&_a:focus-visible]:[outline:2px_solid_#a7b6ff] [&_a:focus-visible]:outline-offset-[2px] [&_code]:font-[ui-monospace,_'Cascadia_Code',_'SFMono-Regular',_Consolas,_monospace] [&_code]:text-[.9em] [&_code]:bg-[#ffffff08] [&_code]:text-[#dde1e9] [&_code]:rounded-[4px] [&_code]:py-[2px] [&_code]:px-[4px] [&_pre]:overflow-x-auto [&_pre]:p-[12px] [&_pre]:border-[1px] [&_pre]:border-solid [&_pre]:border-[var(--line)] [&_pre]:rounded-[6px] [&_pre]:bg-[#101218] [&_pre]:whitespace-pre [&_pre]:[overflow-wrap:normal] [&_pre_code]:p-0 [&_pre_code]:bg-transparent [&_pre_code]:rounded-none [&_blockquote]:ml-0 [&_blockquote]:pl-[12px] [&_blockquote]:border-l-[3px] [&_blockquote]:border-solid [&_blockquote]:border-l-[#57688f] [&_blockquote]:text-[#98a6c2] [&_table]:block [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:my-[12px] [&_table]:mx-0 [&_th]:border-[1px] [&_th]:border-solid [&_th]:border-[#353d4d] [&_th]:py-[6px] [&_th]:px-[10px] [&_th]:text-left [&_td]:border-[1px] [&_td]:border-solid [&_td]:border-[#353d4d] [&_td]:py-[6px] [&_td]:px-[10px] [&_td]:text-left [&_th]:bg-[#202633] [&_hr]:border-0 [&_hr]:border-t-[1px] [&_hr]:border-solid [&_hr]:border-t-[var(--line)] [&_hr]:my-[16px] [&_hr]:mx-0 [&_img]:max-w-full [&_img]:h-auto"
+  >
     <div v-html="html" />
-    <span v-if="streaming" class="streaming-cursor" aria-hidden="true" />
-  </div>
+    <span
+      v-if="streaming"
+      class="streaming-cursor inline-block w-[2px] h-[1em] ml-[3px] [vertical-align:-2px] bg-[#a8b6ec] animate-pulse [@media(prefers-reduced-motion:reduce)]:animate-none"
+      aria-hidden="true"
+    />
+  </AppCodeSurface>
 </template>
-
-<style scoped>
-.chat-markdown { font-size: 13px; line-height: 1.7; color: #d4d7df; overflow-wrap: anywhere; }
-.chat-markdown :deep(p), .chat-markdown :deep(ul), .chat-markdown :deep(ol), .chat-markdown :deep(blockquote), .chat-markdown :deep(pre) { margin: 0 0 12px; }
-.chat-markdown :deep(p) { font-size: inherit; line-height: inherit; color: inherit; }
-.chat-markdown :deep(div > :last-child) { margin-bottom: 0; }
-.chat-markdown :deep(h1), .chat-markdown :deep(h2), .chat-markdown :deep(h3), .chat-markdown :deep(h4), .chat-markdown :deep(h5), .chat-markdown :deep(h6) { margin: 18px 0 8px; color: #e0e6f4; line-height: 1.4; }
-.chat-markdown :deep(h1) { font-size: 20px; }
-.chat-markdown :deep(h2) { font-size: 17px; }
-.chat-markdown :deep(h3) { font-size: 14px; }
-.chat-markdown :deep(h4), .chat-markdown :deep(h5), .chat-markdown :deep(h6) { font-size: 12px; }
-.chat-markdown :deep(div > :first-child) { margin-top: 0; }
-.chat-markdown :deep(ul), .chat-markdown :deep(ol) { padding-left: 22px; }
-.chat-markdown :deep(li + li) { margin-top: 4px; }
-.chat-markdown :deep(li > ul), .chat-markdown :deep(li > ol) { margin-top: 4px; }
-.chat-markdown :deep(strong) { font-weight: 600; color: #e7e9ef; }
-.chat-markdown :deep(a) { color: #a7b6ff; text-decoration: underline; text-underline-offset: 2px; }
-.chat-markdown :deep(a:hover) { color: #d2dbff; }
-.chat-markdown :deep(a:focus-visible) { outline: 2px solid #a7b6ff; outline-offset: 2px; }
-.chat-markdown :deep(code) { font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: .9em; background: #ffffff08; color: #dde1e9; border-radius: 4px; padding: 2px 4px; }
-.chat-markdown :deep(pre) { overflow-x: auto; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #101218; white-space: pre; overflow-wrap: normal; }
-.chat-markdown :deep(pre code) { padding: 0; background: none; border-radius: 0; }
-.chat-markdown :deep(blockquote) { margin-left: 0; padding-left: 12px; border-left: 3px solid #57688f; color: #98a6c2; }
-.chat-markdown :deep(table) { display: block; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
-.chat-markdown :deep(th), .chat-markdown :deep(td) { border: 1px solid #353d4d; padding: 6px 10px; text-align: left; }
-.chat-markdown :deep(th) { background: #202633; }
-.chat-markdown :deep(hr) { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
-.chat-markdown :deep(img) { max-width: 100%; height: auto; }
-.streaming-cursor { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: #a8b6ec; animation: cursor-pulse 1s ease-in-out infinite alternate; }
-@keyframes cursor-pulse { to { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) { .streaming-cursor { animation: none; } }
-</style>

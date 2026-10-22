@@ -21,6 +21,12 @@ npm run native:smoke # after building a debug desktop binary
 npm run desktop:build
 ```
 
+## UI components
+
+Use Reka UI primitives for interactive controls and unprefixed Tailwind utilities for all styling. Shared controls include `AppSelect`, `AppDialog`, `ContextMenu`, and `WorkingFolderPicker`; Reka owns selection, keyboard navigation, focus, dismissal, and popup positioning. Chat tabs use Reka Tabs while retaining application-specific drag reordering and close shortcuts.
+
+`app/assets/tailwind.css` contains the Tailwind import and shared theme tokens only. Reuse `AppButton` (`variant="primary"`, `size="icon"`), `AppInput`, `AppTextarea`, and the dialog panel/header/footer components. Component classes can override their defaults. The lightweight functional primitives preserve native template refs and forward attributes and events; inputs use Vue's native model directives, including composition and checkbox handling. Keep one-off utilities in templates. Inline values are reserved for runtime geometry such as resizable panes, virtualized rows, and graph positions.
+
 ## Releases
 
 Releases are manual-only. Pushes do not create releases or increment the version. The current app version is `0.1.0`.

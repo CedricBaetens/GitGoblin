@@ -31,23 +31,40 @@ onMounted(async () => {
     emit("error", `Could not read window state: ${error}`);
   }
 });
-onUnmounted(() => { disposed = true; unlisten?.(); });
+onUnmounted(() => {
+  disposed = true;
+  unlisten?.();
+});
 </script>
 
 <template>
-  <div class="window-controls" data-tauri-drag-region="false">
-    <button aria-label="Minimize window" title="Minimize" @click="control('minimize')"><Minus :size="14" /></button>
-    <button :aria-label="maximized ? 'Restore window' : 'Maximize window'" :title="maximized ? 'Restore' : 'Maximize'" @click="control('toggleMaximize')">
+  <div
+    class="window-controls flex h-full ml-[5px] shrink-0"
+    data-tauri-drag-region="false"
+  >
+    <AppButton
+      class="w-[44px] h-full p-0 border-0 rounded-none text-[#a5aab7] hover:bg-[#2a2d36] hover:text-[white] focus-visible:outline-offset-[-3px]"
+      aria-label="Minimize window"
+      title="Minimize"
+      @click="control('minimize')"
+    >
+      <Minus :size="14" />
+    </AppButton>
+    <AppButton
+      class="w-[44px] h-full p-0 border-0 rounded-none text-[#a5aab7] hover:bg-[#2a2d36] hover:text-[white] focus-visible:outline-offset-[-3px]"
+      :aria-label="maximized ? 'Restore window' : 'Maximize window'"
+      :title="maximized ? 'Restore' : 'Maximize'"
+      @click="control('toggleMaximize')"
+    >
       <Copy v-if="maximized" :size="12" /><Square v-else :size="12" />
-    </button>
-    <button class="window-close" aria-label="Close window" title="Close" @click="control('close')"><X :size="15" /></button>
+    </AppButton>
+    <AppButton
+      class="window-close w-[44px] h-full p-0 border-0 rounded-none text-[#a5aab7] hover:bg-[#2a2d36] hover:text-[white] [button&:hover]:bg-[#c42b3a] focus-visible:outline-offset-[-3px]"
+      aria-label="Close window"
+      title="Close"
+      @click="control('close')"
+    >
+      <X :size="15" />
+    </AppButton>
   </div>
 </template>
-
-<style scoped>
-.window-controls { display: flex; height: 100%; margin-left: 5px; flex-shrink: 0; }
-button { width: 44px; height: 100%; padding: 0; border: 0; border-radius: 0; color: #a5aab7; }
-button:hover { background: #2a2d36; color: white; }
-button.window-close:hover { background: #c42b3a; }
-button:focus-visible { outline-offset: -3px; }
-</style>
