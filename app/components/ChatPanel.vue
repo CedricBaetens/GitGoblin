@@ -27,6 +27,7 @@ import { conversationDefaults, conversationPresets, conversationPrompt, conversa
 import type { ConversationTicket } from '~/lib/conversation-presets';
 import { isThreadRunning, repositoryThreads, repositoryThreadKey } from "~/lib/threads";
 import { chatActivity } from "~/lib/chat-tabs";
+import { chatWorktreeOptions } from '~/lib/chat-worktrees';
 import { chatModelChoices, preferredChatModel, modelSettingDefaults, chatModelSelection, defaultConversationModel } from '~/lib/chat-models';
 import { T3Client, parsePairing } from "~/lib/t3";
 import { invoke, desktop, git } from "~/lib/native";
@@ -121,10 +122,10 @@ async function loadModels() {
 const switchingWorktree = ref(false);
 const currentWorktree = computed(() => thread.value?.worktreePath || projects.value.find(project => project.id === thread.value?.projectId)?.workspaceRoot || '');
 const chatWorktrees = computed(() => repositoryThreadKey(props.repo) === repositoryThreadKey(currentWorktree.value) ? props.worktrees : []);
-async function switchWorktree(event: Event) {
-  const select = event.target as HTMLSelectElement;
-  const target = chatWorktrees.value.find(tree => tree.path === select.value);
-  select.value = currentWorktree.value;
+const worktreeOptions = computed(() => chatWorktreeOptions(chatWorktrees.value, currentWorktree.value, thread.value?.branch));
+const worktreeHint = computed(() => switchingWorktree.value ? 'Switching working folder…' : busy.value ? 'The agent is working here. Stop the task to switch folders.' : 'The agent edits files here. Switching uses another checkout; it does not move your changes.');
+async function switchWorktree(path: string) {
+  const target = chatWorktrees.value.find(tree => repositoryThreadKey(tree.path) === repositoryThreadKey(path));
   if (!thread.value || !target || busy.value || sending.value || switchingWorktree.value) return;
   switchingWorktree.value = true;
   error.value = '';
@@ -565,13 +566,7 @@ defineExpose({
       </div>
     </template>
     <template v-else-if="connected">
-      <label v-if="thread" class="chat-worktree-picker">
-        <FolderGit2 :size="14" />
-        <select aria-label="Chat worktree" :value="currentWorktree" :disabled="busy || sending || switchingWorktree" :title="busy ? 'Stop the agent before switching worktrees.' : currentWorktree" @change="switchWorktree">
-          <option v-if="!chatWorktrees.some(tree => tree.path === currentWorktree)" :value="currentWorktree">{{ currentWorktree }}</option>
-          <option v-for="tree in chatWorktrees" :key="tree.path" :value="tree.path">{{ tree.branch || 'Detached HEAD' }} &middot; {{ tree.path }}</option>
-        </select>
-      </label>
+      <WorkingFolderPicker v-if="thread" :options="worktreeOptions" :value="currentWorktree" :disabled="busy || sending || switchingWorktree" :hint="worktreeHint" @select="switchWorktree" />
       <div v-if="activeMatchingThreads.length > 1" class="shared-note">
         {{ activeMatchingThreads.length }} agents are working in this worktree.
       </div>
@@ -965,9 +960,4 @@ defineExpose({
 .activity-error { color: #e48791; }
 .streaming-label { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: #9baed4; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
-</style>
-
-<style scoped>
-.chat-worktree-picker { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #96a3ba; }
-.chat-worktree-picker select { min-width: 0; flex: 1; background: #171c26; color: inherit; border: 1px solid #35405a; border-radius: 4px; padding: 5px; }
 </style>

@@ -273,10 +273,6 @@ const threads = ref<T3Thread[]>([]),
   t3Connected = ref(false);
 const chatTabs = ref(restoreChatTabs(null));
 const selectedThreadId = computed(() => chatTabs.value.selected);
-const selectedChatWorktree = computed(() => {
-  const thread = threads.value.find(thread => thread.id === selectedThreadId.value);
-  return thread?.worktreePath || projects.value.find(project => project.id === thread?.projectId)?.workspaceRoot || '';
-});
 const chatNavigation = ref<{ openAll: (openOnly?: boolean) => void; closePicker: () => void }>();
 const chatActivityStates = ref<Record<string, { attention: boolean; response: string }>>({});
 const seenResponses = ref<Record<string, string>>({});
@@ -1017,12 +1013,6 @@ onUnmounted(() => {
         :aria-valuenow="sidebarWidth" :aria-valuemin="minSidebarWidth" :aria-valuemax="maxSidebarWidth(sidebarRoom)"
         title="Drag to resize; double-click to reset. Arrow keys also resize."
         @pointerdown="startSidebarResize" @pointermove="moveSidebarResize" @pointerup="stopSidebarResize" @pointercancel="stopSidebarResize" @lostpointercapture="stopSidebarResize" @keydown="sidebarResizeKey" @dblclick="resetSidebarWidth" />
-      <div v-if="chatVisible && selectedChatWorktree" class="sidebar-heading">
-        <div class="chat-worktree-label" :title="selectedChatWorktree">
-          <FolderGit2 :size="12" />
-          <span>Worktree · {{ selectedChatWorktree.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) }}</span>
-        </div>
-      </div>
       <div v-show="!chatVisible" class="repository-picker">
         <FolderGit2 :size="19" />
         <div>
