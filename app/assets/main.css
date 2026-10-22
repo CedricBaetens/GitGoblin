@@ -177,11 +177,6 @@ small {
   font-weight: 650;
 }
 .brand > svg { width: 21px; height: 21px; color: #b1bef7; }
-.application-menu { margin-left: auto; }
-.application-menu button { height: 32px; gap: 4px; padding: 0 8px; font-size: 12px; font-weight: 400; }
-.file-menu { position: fixed; inset: var(--titlebar-height) auto auto calc(var(--sidebar) - 70px); margin: 5px 0 0; width: 270px; max-width: calc(100vw - 32px); padding: 5px; color: #d5d7df; background: #1b1e26; border: 1px solid #353c4b; border-radius: 7px; box-shadow: 0 12px 40px #0008; }
-.file-menu > button { width: 100%; justify-content: flex-start; font-size: 12px; }
-.file-menu kbd { margin-left: auto; }
 .titlebar-context {
   display: flex;
   align-items: center;

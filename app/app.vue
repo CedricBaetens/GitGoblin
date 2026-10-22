@@ -131,7 +131,6 @@ function resetSidebarWidth() {
   saveSidebarWidth();
 }
 const repositoryMenu = ref<HTMLDivElement>();
-const fileMenu = ref<HTMLDivElement>();
 const renamePath = ref(''), renameName = ref('');
 const renameInput = ref<HTMLInputElement>();
 async function startRepositoryRename(path: string) {
@@ -268,14 +267,6 @@ async function openNewConversation(event: MouseEvent) {
   chatVisible.value = true;
   await nextTick();
   chat.value?.newConversation(trigger);
-}
-function toggleTopMenu(element: HTMLDivElement | undefined, event: MouseEvent) {
-  if (!element) return;
-  if (element.matches(':popover-open')) { element.hidePopover(); return; }
-  element.showPopover();
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  element.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - element.offsetWidth - 8))}px`;
-  element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
 }
 const threads = ref<T3Thread[]>([]),
   projects = ref<T3Project[]>([]),
@@ -804,7 +795,6 @@ async function openEditor() {
 }
 
 async function chooseRepository(path?: string) {
-  fileMenu.value?.hidePopover();
   repositoryMenu.value?.hidePopover();
   workspaceMode.value = 'git';
   if (path && snapshot.value && normalized(path) === normalized(repo.value)) return;
@@ -889,13 +879,6 @@ onUnmounted(() => {
             <span v-else-if="!chatVisible && allActiveAgents.length" class="mode-running" role="status" :aria-label="`${allActiveAgents.length} agent tasks running`" :title="`${allActiveAgents.length} agent tasks running`"><LoaderCircle :size="13" class="spin" /></span>
           </button>
         </nav>
-        <nav class="application-menu" aria-label="Application menu">
-          <button aria-haspopup="true" @click="toggleTopMenu(fileMenu, $event)">File<ChevronDown :size="11" /></button>
-        </nav>
-      </div>
-      <div id="file-menu" ref="fileMenu" popover class="file-menu" data-tauri-drag-region="false" aria-label="File actions">
-        <button :disabled="busy" @click="chooseRepository()"><FolderOpen :size="15" />Open repository…<kbd>Ctrl O</kbd></button>
-        <button v-if="!desktop()" @click="fileMenu?.hidePopover(); w.showExample()"><Layers :size="15" />Explore example workspace</button>
       </div>
       <nav v-if="!chatVisible && favorites.length" class="favorite-tabs" aria-label="Favorite repositories">
         <button v-for="path in favorites" :key="path" aria-haspopup="menu" @contextmenu="repositoryContext($event, path)" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'page' : undefined" @click="chooseRepository(path)">
@@ -915,6 +898,8 @@ onUnmounted(() => {
         @error="error = $event"
         @select="selectChat" @close="closeChat" @move="(id, target) => chatTabs = moveChatTab(chatTabs, id, target)" @new="openNewConversation" />
       <div id="repository-menu" ref="repositoryMenu" popover class="repository-menu" data-tauri-drag-region="false" aria-label="Repositories">
+        <button :disabled="busy" @click="chooseRepository()"><FolderOpen :size="15" /><span>Open repository&#8230;</span><kbd>Ctrl O</kbd></button>
+        <button v-if="!desktop()" @click="repositoryMenu?.hidePopover(); w.showExample()"><Layers :size="15" />Explore example workspace</button>
         <div class="repository-menu-heading">Recent repositories</div>
         <div v-for="path in [...new Set([...favorites, ...recent])]" :key="path" class="repository-menu-row" @contextmenu="repositoryContext($event, path)">
           <button aria-haspopup="menu" @keydown.shift.f10.prevent="repositoryContext($event, path)" @keydown.context-menu.prevent="repositoryContext($event, path)" :disabled="busy" :title="path" :aria-current="normalized(path) === normalized(snapshot?.repositoryRoot || repo) ? 'true' : undefined" @click="chooseRepository(path)">
@@ -1470,7 +1455,7 @@ onUnmounted(() => {
           Your branches, changes, and agent conversations.<br />One focused
           workspace, built around your code.
         </p>
-        <p>Choose <strong>File → Open repository</strong> to get started.<br /><kbd>Ctrl O</kbd></p>
+        <p>Choose <strong>Repositories → Open repository</strong> to get started.<br /><kbd>Ctrl O</kbd></p>
         <div class="welcome-features">
           <span><GitCommitHorizontal :size="16" />Thoughtful commits</span
           ><span><Layers :size="16" />Parallel worktrees</span
