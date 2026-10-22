@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../../nuxt.config.ts";
 
 @theme {
   --color-ui-menu: #1b202b;
