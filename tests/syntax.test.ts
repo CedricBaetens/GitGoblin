@@ -5,7 +5,7 @@ import { parseDiff } from '../app/lib/diff';
 it('detects each file language, including deleted files and paths with spaces', () => {
   expect(diffLanguage('+++ b/src/my file.cs\t')).toBe('csharp');
   expect(diffLanguage('--- a/old.ts\n+++ /dev/null')).toBe('typescript');
-  expect(diffLanguage('', 'component.vue')).toBe('xml');
+  expect(diffLanguage('', 'component.vue')).toBe('vue');
   expect(diffLanguage('+++ b/unknown.xyz')).toBeUndefined();
 });
 
@@ -39,4 +39,26 @@ it('uses the diff language and token classes for conflict editor code', () => {
   expect(lines.map(line => line.map(token => token.text).join('')).join('\n')).toBe(text);
   expect(lines[0]!.some(token => token.classes.includes('hljs-keyword'))).toBe(true);
   expect(highlightCode('unknown\n', 'file.unknown')).toEqual([[{ text: 'unknown', classes: '' }], [{ text: '', classes: '' }]]);
+});
+
+ it('highlights Vue script, template and style fragments without section openers', () => {
+  const file = (code: string) => `diff --git a/App.vue b/App.vue\n--- a/App.vue\n+++ b/App.vue\n@@ -230,0 +231 @@\n+${code}\n`;
+  for (const [code, tokenClass] of [
+    ['const active: boolean = true;', 'hljs-keyword'],
+    ['  :active-filter="filter"', 'hljs-attr'],
+    ['.active { color: red; }', 'hljs-attribute'],
+  ]) {
+    const tokens = Object.values(highlightDiff(file(code!))).flatMap(line => line.next || []);
+    expect(tokens.map(token => token.text).join('')).toBe(code);
+    expect(tokens.some(token => token.classes.includes(tokenClass!))).toBe(true);
+  }
+});
+
+it('preserves Vue section languages and source text', () => {
+  const source = '<script setup lang="ts">\nconst active: boolean = true;\n</script>\n<template>\n<div :class="active">Hello</div>\n</template>\n<style scoped>\n.active { color: red; }\n</style>';
+  const lines = highlightCode(source, 'App.vue');
+  expect(lines.map(line => line.map(token => token.text).join('')).join('\n')).toBe(source);
+  expect(lines[1]!.some(token => token.classes.includes('hljs-keyword'))).toBe(true);
+  expect(lines[4]!.some(token => token.classes.includes('hljs-tag'))).toBe(true);
+  expect(lines[7]!.some(token => token.classes.includes('hljs-attribute'))).toBe(true);
 });

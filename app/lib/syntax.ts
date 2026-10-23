@@ -8,7 +8,7 @@ export type DiffSyntax = Record<number, { old?: SyntaxToken[]; next?: SyntaxToke
 
 const languages: Record<string, string> = {
   js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  ts: 'typescript', tsx: 'typescript', vue: 'xml', html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml', csproj: 'xml',
+  ts: 'typescript', tsx: 'typescript', vue: 'vue', html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml', csproj: 'xml',
   cs: 'csharp', css: 'css', scss: 'scss', less: 'less', json: 'json', jsonc: 'json',
   rs: 'rust', py: 'python', go: 'go', java: 'java', kt: 'kotlin', rb: 'ruby', php: 'php',
   c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', sql: 'sql', sh: 'bash', bash: 'bash',
@@ -20,10 +20,20 @@ export function diffLanguage(header: string, fallback = '') {
   if (path === '/dev/null') path = /^--- (.+)$/m.exec(header)?.[1]?.split('\t')[0] || fallback;
   const name = path?.replace(/"$/, '').split('/').at(-1)?.toLowerCase() || '';
   const language = name === 'dockerfile' ? 'dockerfile' : name === 'makefile' ? 'makefile' : languages[name.split('.').at(-1)!];
-  return language && highlighter.registered(language) ? language : undefined;
+  return language && (language === 'vue' || highlighter.registered(language)) ? language : undefined;
 }
 
 function codeLines(code: string, language: string): SyntaxToken[][] {
+  if (language === 'vue') {
+    if (/<(?:script|template|style)\b/.test(code)) return codeLines(code, 'xml');
+    // shortcut: partial diffs lack SFC section context; infer the fragment until full file context is available.
+    if (/^\s*(?:[:@#][\w.-]+|v-[\w:-]+|[\w-]+\s*=)/m.test(code) && !/^\s*(?:const|let|var|function|import|export)\b/m.test(code)) {
+      return codeLines('<div\n' + code, 'xml').slice(1);
+    }
+    if (/^\s*(?:<[/!\w]|\/>|>)/m.test(code)) return codeLines(code, 'xml');
+    if (/^\s*(?:[.#][\w-]+[^\n]*\{|[\w-]+\s*:\s*[^;\n]+;)/m.test(code)) return codeLines(code, 'css');
+    return codeLines(code, 'typescript');
+  }
   const lines: SyntaxToken[][] = [[]];
   const tree = highlighter.highlight(language, code);
   function visit(node: typeof tree | (typeof tree.children)[number], classes = '') {

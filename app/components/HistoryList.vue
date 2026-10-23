@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from "vue";
+import { historyRefs } from "~/lib/history-refs";
 import { commitGraph } from "~/lib/graph";
 import type { Commit } from "~/lib/types";
 const props = defineProps<{
@@ -31,7 +32,12 @@ const end = computed(() =>
     start.value + Math.ceil(height.value / rowHeight) + 30,
   ),
 );
-const visible = computed(() => props.commits.slice(start.value, end.value));
+const visible = computed(() =>
+  props.commits.slice(start.value, end.value).map((commit) => ({
+    ...commit,
+    refs: historyRefs(commit.refs),
+  })),
+);
 let observer: ResizeObserver | undefined;
 function onScroll() {
   if (!list.value) return;

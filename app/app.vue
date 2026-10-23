@@ -236,18 +236,18 @@ async function switchBranch(branch: GitRef) {
     /* The workbench displays Git's error, including local-change protection. */
   }
 }
+function filterBranch(branch: GitRef, filter: "only" | "exclude") {
+  view.value = "history";
+  const active = w.historyBranch.value;
+  w.filterHistory(
+    active?.name === branch.name && active.mode === filter ? undefined : branch.name,
+    filter,
+  );
+}
 function branchMenu(event: MouseEvent | KeyboardEvent, branch: GitRef) {
   const local = branch.name.startsWith("refs/heads/");
   const target = local ? branch.name.replace("refs/heads/", "") : branch.name;
   const items = [
-    ...(['only', 'exclude'] as const).map(filter => ({
-      label: filter === 'only' ? 'Only view branch' : 'Exclude branch',
-      disabled: example.value,
-      run: () => {
-        view.value = 'history';
-        w.filterHistory(branch.name, filter);
-      },
-    })),
     {
       label: "Switch to branch",
       disabled: branch.current || busy.value || example.value,
@@ -1733,6 +1733,9 @@ onUnmounted(() => {
                 :key="repo"
                 :nodes="localBranchTree"
                 @context="branchMenu"
+                :filters-disabled="example"
+                :active-filter="w.historyBranch.value"
+                @filter="filterBranch"
                 @select="switchBranch"
               />
               <AppTreeRow
@@ -1836,6 +1839,9 @@ onUnmounted(() => {
                 :key="repo"
                 :nodes="remoteBranchTree"
                 @context="branchMenu"
+                :filters-disabled="example"
+                :active-filter="w.historyBranch.value"
+                @filter="filterBranch"
                 @select="switchBranch"
               />
               <AppTreeRow
