@@ -2103,7 +2103,7 @@ onUnmounted(() => {
                   />
                   <div
                     v-if="!group.files.length"
-                    class="small-empty py-[35px] px-[10px] text-[#65728b] text-center text-[11px] [&>svg]:mb-[10px]"
+                    class="small-empty flex flex-col items-center py-[35px] px-[10px] text-[#65728b] text-center text-[11px] [&>svg]:mb-[10px]"
                   >
                     <Check :size="23" />
                     <p>
