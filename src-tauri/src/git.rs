@@ -568,7 +568,7 @@ pub fn execute(req: Request) -> Result<Value, String> {
             json!(String::from_utf8_lossy(&out))
         }
         "fetch" => json!(git(&repo, &["fetch", "--all", "--prune"])?),
-        "pull" => json!(git(&repo, &["pull", "--ff-only"])?),
+        "pull" => json!(git(&repo, &["pull", "--ff-only", "--autostash"])?),
         "push" => {
             let args = if req.mode == "force" {
                 vec!["push", "--force-with-lease"]
@@ -935,6 +935,39 @@ mod tests {
         assert_eq!(git(repo, &["log", "-1", "--format=%B"]).unwrap().trim(), "Add file\n\nKeep local edits out of the commit.");
         assert!(git(repo, &["diff", "--cached"]).unwrap().is_empty());
     }
+    #[test]
+    fn pull_restores_local_changes_with_and_without_rebase_config() {
+        for rebase in ["true", "false"] {
+            let dir = fixture();
+            let repo = dir.path();
+            fs::write(repo.join("local.txt"), "original\n").unwrap();
+            git(repo, &["add", "."]).unwrap();
+            git(repo, &["commit", "-m", "initial"]).unwrap();
+            git(repo, &["branch", "upstream"]).unwrap();
+            git(repo, &["remote", "add", "origin", "."]).unwrap();
+            git(repo, &["fetch", "origin"]).unwrap();
+            let branch = git(repo, &["branch", "--show-current"]).unwrap();
+            git(repo, &["branch", "--set-upstream-to=origin/upstream", branch.trim()]).unwrap();
+            git(repo, &["switch", "upstream"]).unwrap();
+            fs::write(repo.join("remote.txt"), "incoming\n").unwrap();
+            git(repo, &["add", "."]).unwrap();
+            git(repo, &["commit", "-m", "incoming"]).unwrap();
+            git(repo, &["switch", branch.trim()]).unwrap();
+            git(repo, &["config", "pull.rebase", rebase]).unwrap();
+            fs::write(repo.join("local.txt"), "staged\n").unwrap();
+            git(repo, &["add", "local.txt"]).unwrap();
+            fs::write(repo.join("local.txt"), "unstaged\n").unwrap();
+            fs::write(repo.join("untracked.txt"), "keep\n").unwrap();
+
+            execute(request(repo, "pull")).unwrap();
+
+            assert_eq!(fs::read_to_string(repo.join("remote.txt")).unwrap(), "incoming\n");
+            assert_eq!(fs::read_to_string(repo.join("local.txt")).unwrap(), "unstaged\n");
+            assert_eq!(fs::read_to_string(repo.join("untracked.txt")).unwrap(), "keep\n");
+            assert!(git(repo, &["stash", "list"]).unwrap().is_empty());
+        }
+    }
+
     #[test]
     fn force_push_rewrites_history_but_preserves_unseen_remote_commits() {
         let dir = fixture();

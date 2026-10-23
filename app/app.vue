@@ -877,7 +877,7 @@ const definitions: Record<
   pull: {
     title: "Pull changes",
     description:
-      "Fast-forward the current branch from its upstream. Diverged branches require an explicit merge or rebase.",
+      "Fast-forward the current branch from its upstream, automatically stashing and reapplying tracked edits. Reapplied edits may need resolving or staging again. Diverged branches require an explicit merge or rebase.",
   },
   push: {
     title: "Push branch",
