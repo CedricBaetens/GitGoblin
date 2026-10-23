@@ -2,6 +2,20 @@ import { expect, it } from 'vitest';
 import { diffLanguage, highlightDiff, highlightCode } from '../app/lib/syntax';
 import { parseDiff } from '../app/lib/diff';
 
+it('distinguishes C# properties, method calls and types without recoloring strings or comments', () => {
+  const source = 'public int PropertyId { get; }\nvar result = accessor.HttpContext.Request.GetValue<bool>("PropertyId");\nvar service = new AnalyticsService();\n// accessor.HttpContext.GetValue()\n';
+  const lines = highlightCode(source, 'Analytics.cs');
+  const tokens = lines.flat();
+  expect(lines.map(line => line.map(token => token.text).join('')).join('\n')).toBe(source);
+  for (const [name, scope] of [['PropertyId', '#9CDCFE'], ['HttpContext', '#9CDCFE'], ['GetValue', '#DCDCAA'], ['AnalyticsService', '#4EC9B0']]) {
+    expect(tokens.some(token => token.text === name && token.color === scope)).toBe(true);
+  }
+  expect(tokens.some(token => token.text.includes('"PropertyId"') && token.color === '#CE9178')).toBe(true);
+  expect(lines[3]!.every(token => token.color === '#6A9955')).toBe(true);
+  const diff = highlightDiff(`--- a/Analytics.cs\n+++ b/Analytics.cs\n@@ -0,0 +1 @@\n+${source.split('\n')[1]}\n`);
+  expect(Object.values(diff).flatMap(line => line.next || []).some(token => token.text === 'GetValue' && token.color === '#DCDCAA')).toBe(true);
+});
+
 it('detects each file language, including deleted files and paths with spaces', () => {
   expect(diffLanguage('+++ b/src/my file.cs\t')).toBe('csharp');
   expect(diffLanguage('--- a/old.ts\n+++ /dev/null')).toBe('typescript');
@@ -27,7 +41,7 @@ it('highlights history files separately and falls back for unknown or huge conte
   const file = (path: string, code: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1 @@\n+${code}\n`;
   const text = file('a.cs', 'public class Example {}') + file('b.json', '{"ok": true}');
   const tokens = Object.values(highlightDiff(text)).flatMap((line) => line.next || []);
-  expect(tokens.some((token) => token.text === 'public' && token.classes.includes('hljs-keyword'))).toBe(true);
+  expect(tokens.some((token) => token.text === 'public' && token.color === '#569CD6')).toBe(true);
   expect(tokens.some((token) => token.text === '"ok"' && token.classes.includes('hljs-attr'))).toBe(true);
   expect(highlightDiff(file('a.unknown', 'some text'))).toEqual({});
   expect(highlightDiff('x'.repeat(300_001), 'file.ts')).toEqual({});

@@ -39,7 +39,7 @@ it.each(['file.cs', 'file.unknown'])('marks paired replacements while preserving
     const tokens = result[line.index]![line.kind === 'delete' ? 'old' : 'next']!;
     expect(tokens.map(token => token.text).join('')).toBe(line.text.slice(1));
     expect(tokens.filter(token => token.classes.includes('diff-inline-change')).map(token => token.text).join('')).toBe(line.kind === 'delete' ? 'CSV' : 'Excel');
-    if (path.endsWith('.cs')) expect(tokens.every(token => token.classes.includes('hljs-comment'))).toBe(true);
+    if (path.endsWith('.cs')) expect(tokens.every(token => token.color === '#6A9955')).toBe(true);
   }
 });
 

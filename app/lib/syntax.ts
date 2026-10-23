@@ -1,9 +1,13 @@
 import { common, createLowlight } from 'lowlight';
+import { createHighlighterCoreSync } from 'shiki/core';
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
+import csharp from 'shiki/langs/csharp.mjs';
+import darkPlus from 'shiki/themes/dark-plus.mjs';
 import { parseDiffFiles, splitDiffLines } from './diff';
 import { inlineChanges, type ChangeRange } from './inline-changes';
 
 const highlighter = createLowlight(common);
-export interface SyntaxToken { text: string; classes: string }
+export interface SyntaxToken { text: string; classes: string; color?: string }
 export type DiffSyntax = Record<number, { old?: SyntaxToken[]; next?: SyntaxToken[] }>;
 
 const languages: Record<string, string> = {
@@ -23,7 +27,15 @@ export function diffLanguage(header: string, fallback = '') {
   return language && (language === 'vue' || highlighter.registered(language)) ? language : undefined;
 }
 
+let csharpHighlighter: ReturnType<typeof createHighlighterCoreSync> | undefined;
 function codeLines(code: string, language: string): SyntaxToken[][] {
+  if (language === 'csharp') {
+    csharpHighlighter ??= createHighlighterCoreSync({
+      langs: [csharp], themes: [darkPlus], engine: createJavaScriptRegexEngine(),
+    });
+    return csharpHighlighter.codeToTokens(code, { lang: 'csharp', theme: 'dark-plus' }).tokens
+      .map(line => line.map(token => ({ text: token.content, classes: 'syntax-token', color: token.color })));
+  }
   if (language === 'vue') {
     if (/<(?:script|template|style)\b/.test(code)) return codeLines(code, 'xml');
     // shortcut: partial diffs lack SFC section context; infer the fragment until full file context is available.
@@ -69,7 +81,7 @@ function markChanges(tokens: SyntaxToken[], ranges: ChangeRange[]): SyntaxToken[
       const range = ranges[rangeIndex];
       const changed = range && range.start <= start;
       const boundary = Math.min(end, range ? changed ? range.end : range.start : end);
-      result.push({ text: token.text.slice(start - offset, boundary - offset), classes: changed ? `${token.classes} diff-inline-change`.trim() : token.classes });
+      result.push({ ...token, text: token.text.slice(start - offset, boundary - offset), classes: changed ? `${token.classes} diff-inline-change`.trim() : token.classes });
       start = boundary;
     }
     offset = end;

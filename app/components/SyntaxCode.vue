@@ -120,6 +120,7 @@ defineExpose({ reveal });
               v-for="(token, i) in tokens[index]"
               :key="i"
               :class="token.classes"
+              :style="token.color ? { '--syntax-color': token.color } : undefined"
               >{{ token.text }}</span
             ></template
           ><template v-else>{{ line }}</template

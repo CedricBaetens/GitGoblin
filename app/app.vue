@@ -724,6 +724,11 @@ const dialog = ref(""),
 const output = ref(""),
   outputTitle = ref(""),
   rebaseCommits = ref<(Commit & { action: string })[]>([]);
+const resetModeDescriptions: Record<string, string> = {
+  soft: "Move the branch to the selected commit. Keep your file contents and staged changes. Changes from the removed commits become staged, ready to commit again.",
+  mixed: "Move the branch to the selected commit and unstage all changes. Keep your file contents, including changes from the removed commits, so you can review and stage them again.",
+  hard: "Move the branch to the selected commit and replace tracked files with that commit’s contents. Discard all staged and unstaged changes to tracked files. Untracked files that block the reset may also be deleted. Uncommitted changes cannot be recovered through reflog.",
+};
 const discardFiles = ref<NonNullable<GitRequest["files"]>>([]);
 const discardRepo = ref("");
 async function confirmDiscard(paths: string[]) {
@@ -810,7 +815,7 @@ const definitions: Record<
   reset: {
     title: "Reset current branch",
     description:
-      "Soft keeps changes staged. Mixed unstages them. Hard permanently discards tracked changes; reflog cannot recover uncommitted content.",
+      "Move the current branch to a commit. Choose what happens to your staged changes and files below.",
     fields: [
       { key: "target", label: "Commit" },
       { key: "mode", label: "Reset mode", options: ["soft", "mixed", "hard"] },
@@ -2628,6 +2633,7 @@ onUnmounted(() => {
               }}<AppSelect
                 v-if="field.options"
                 v-model="values[field.key]"
+                :aria-describedby="dialog === 'reset' && field.key === 'mode' ? 'reset-mode-description' : undefined"
                 :options="
                   field.options.map((option) => ({
                     value: option,
@@ -2647,7 +2653,15 @@ onUnmounted(() => {
                 v-model="values[field.key]"
                 :disabled="!!rebaseCommits.length"
                 required
-            /></label>
+            />
+              <span
+                v-if="dialog === 'reset' && field.key === 'mode'"
+                id="reset-mode-description"
+                aria-live="polite"
+                class="text-[11px] leading-[1.7]"
+                :class="values.mode === 'hard' ? 'text-[#e4a6b0]' : 'text-[#9ba9c3]'"
+              >{{ resetModeDescriptions[values.mode ?? 'mixed'] }}</span>
+            </label>
             <label v-if="dialog === 'branch-delete'" class="force-option">
               <AppInput
                 v-model="values.mode"
