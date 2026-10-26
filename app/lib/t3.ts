@@ -354,6 +354,8 @@ export class T3Client {
             p.activities = [...(p.activities || []).filter(value => value.id !== activity.id), activity];
           }
           const fields: Record<string, string> = {
+            "run.created": "runs",
+            "run.updated": "runs",
             "message.created": "messages",
             "message.updated": "messages",
             "runtime-request.created": "runtimeRequests",
@@ -363,7 +365,7 @@ export class T3Client {
           };
           const field = fields[event.type];
           if (field && event.payload?.id) {
-            const list = (p as any)[field] as Json[];
+            const list = ((p as any)[field] || []) as Json[];
             (p as any)[field] = [
               ...list.filter((v) => v.id !== event.payload.id),
               event.payload,
@@ -434,7 +436,7 @@ export class T3Client {
       ...titleSeed,
       attachments,
       dispatchMode: {
-        type: thread.activeRunId ? "queue_after_active" : "start_immediately",
+        type: isThreadRunning(this.threads.find(value => value.id === thread.id) || thread) ? "queue_after_active" : "start_immediately",
       },
     });
     return sent.then(result => {

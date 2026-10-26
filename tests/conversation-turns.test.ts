@@ -24,3 +24,11 @@ it('associates modern tools by run even without timestamps and does not expose r
   expect(turn?.activities.map(item => item.title)).toEqual(['Run tests', 'Thinking']);
   expect(turn?.final?.id).toBe('progress');
 });
+
+it('keeps queued and cancelled messages out of the conversation until their run starts', () => {
+  const projection = { messages: [message('active', 'user', 0), message('queued', 'user', 1), message('cancelled', 'user', 2)],
+    runs: [{ id: 'pending', userMessageId: 'queued', status: 'queued' }, { id: 'removed', userMessageId: 'cancelled', status: 'cancelled' }], turnItems: [] } as unknown as T3Projection;
+  expect(conversationTurns(projection, 'active').map(turn => turn.id)).toEqual(['active']);
+  projection.runs![0]!.status = 'running';
+  expect(conversationTurns(projection, 'pending').map(turn => turn.id)).toEqual(['active', 'queued']);
+});

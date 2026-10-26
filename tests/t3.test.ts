@@ -467,6 +467,29 @@ describe("T3 client contract", () => {
     } } } });
     expect(client.projection?.activities).toMatchObject([{ summary: 'Reading file' }]);
   });
+  it('tracks queue run events and queues behind a starting task without a run ID', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const thread = { id: 'one', status: 'starting', activeRunId: null } as any;
+    socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [{ kind: 'snapshot',
+      snapshot: { schemaVersion: 2, projects: [], threads: [thread] } }] });
+    client.selectThread('one');
+    const subscription = socket.sent.at(-1).id;
+    const receive = (item: unknown) => socket.receive({ _tag: 'Chunk', requestId: subscription, values: [item] });
+    receive({ kind: 'snapshot', projection: { thread, messages: [], runtimeRequests: [], turnItems: [] } });
+    const run = { id: 'queued', userMessageId: 'message', status: 'queued', queuePosition: 1 };
+    receive({ kind: 'event', event: { type: 'run.created', payload: run } });
+    expect(client.projection?.runs).toEqual([run]);
+    receive({ kind: 'event', event: { type: 'run.updated', payload: { ...run, status: 'running' } } });
+    expect(client.projection?.runs).toEqual([{ ...run, status: 'running' }]);
+    const sent = client.sendMessage({ ...thread, status: 'idle' }, 'follow up');
+    const command = socket.sent.at(-1);
+    expect(command.payload.dispatchMode).toEqual({ type: 'queue_after_active' });
+    socket.receive({ _tag: 'Exit', requestId: command.id, exit: { _tag: 'Success', value: {} } });
+    await sent;
+  });
   it("keeps the newer message protocol and surfaces string defects", async () => {
     const client = new T3Client(async () => "ws://127.0.0.1/ws");
     clients.push(client);

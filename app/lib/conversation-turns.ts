@@ -2,7 +2,8 @@ import type { T3Message, T3Projection } from './types';
 import { chatActivities } from './chat-activity';
 
 export function conversationTurns(projection: T3Projection | undefined, activeRunId?: string | null) {
-  const messages = [...(projection?.messages || [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const pending = new Set(projection?.runs?.filter(run => run.status === 'queued' || (run.status === 'cancelled' && !run.startedAt)).map(run => run.userMessageId));
+  const messages = [...(projection?.messages || [])].filter(message => !pending.has(message.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const groups: T3Message[][] = [];
   for (const message of messages) {
     if (!groups.length || message.role === 'user') groups.push([]);

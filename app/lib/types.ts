@@ -144,7 +144,16 @@ export interface T3QuestionRequest {
   questions: T3Question[];
   unavailableReason?: string;
 }
+export interface T3Run {
+  id: string;
+  userMessageId: string;
+  status: string;
+  queuePosition?: number | null;
+  queueHeld?: boolean;
+  startedAt?: string | null;
+}
 export interface T3Projection {
+  runs?: T3Run[];
   thread: T3Thread;
   messages: T3Message[];
   runtimeRequests: T3Request[];

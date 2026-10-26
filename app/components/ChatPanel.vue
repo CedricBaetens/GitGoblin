@@ -1167,6 +1167,7 @@ defineExpose({
         Retry connection
       </AppButton>
     </div>
+    <ChatQueue v-if="projection && !example" :projection="projection" :disabled="!connected || sending || !!settlingId" :dispatch="command => client.dispatch(command)" @error="error = $event" />
     <div
       class="composer p-[11px] m-[10px] border-[1px] border-solid border-[#353d4d] rounded-[9px] bg-[#1b1f29] shadow-[0_4px_15px_#0001] [&_textarea]:w-full [&_textarea]:border-0 [&_textarea]:bg-[transparent] [&_textarea]:shadow-[none] [&_textarea]:pt-[3px] [&_textarea]:px-[3px] [&_textarea]:pb-[9px] [&_textarea]:text-[13px] [&_textarea]:min-h-[75px] [&_textarea]:max-h-[220px] [&_textarea]:resize-y relative [&_textarea]:leading-[1.6]"
     >
@@ -1332,10 +1333,10 @@ defineExpose({
         ><AppButton
           class="send-button bg-[#8e9ec9] text-[#17213a] [&:hover:not(:disabled)]:bg-[#a7b6ed] [&:hover:not(:disabled)]:text-[#17213a]"
           :aria-label="
-            thread?.activeRunId ? 'Queue instruction' : 'Send instruction'
+            busy ? 'Queue instruction' : 'Send instruction'
           "
           :title="
-            thread?.activeRunId
+            busy
               ? 'Queue instruction after the current task (Enter)'
               : 'Send instruction (Enter) · Shift+Enter for a new line'
           "
@@ -1350,7 +1351,7 @@ defineExpose({
           @click="send"
         >
           <ArrowUp :size="16" /><span>{{
-            thread?.activeRunId ? "Queue" : "Send"
+            busy ? "Queue" : "Send"
           }}</span>
         </AppButton>
       </div>
