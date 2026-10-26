@@ -59,6 +59,19 @@ function normalizeThread(thread: Json): T3Thread {
   } as T3Thread;
 }
 
+function applyAssistantText(projection: T3Projection, item: Json) {
+  if (item.type !== 'assistant_message' || !item.messageId || typeof item.text !== 'string') return;
+  const old = projection.messages.find(message => message.id === item.messageId);
+  if (old?.updatedAt && item.updatedAt && old.updatedAt > item.updatedAt) return;
+  // T3 streams text through turn items before publishing the completed message.
+  const message = { ...old, id: item.messageId, role: 'assistant', runId: item.runId,
+    text: item.text, streaming: item.streaming,
+    createdAt: old?.createdAt || item.startedAt || item.updatedAt, updatedAt: item.updatedAt };
+  projection.messages = old
+    ? projection.messages.map(value => value.id === message.id ? message : value)
+    : [...projection.messages, message];
+}
+
 // Narrow implementation of the Effect 4 JSON RPC envelope. Kept separate from UI
 // because T3's internal wire protocol can change independently of GitGoblin.
 export class T3Client {
@@ -335,7 +348,10 @@ export class T3Client {
             turnItems: [],
             activities: item.snapshot.thread.activities || [],
           } : undefined);
-          if (projection) this.projections.set(id, projection);
+          if (projection) {
+            for (const item of projection.turnItems || []) applyAssistantText(projection, item);
+            this.projections.set(id, projection);
+          }
           this.onChange();
         } else if (item.kind === "event") {
           const event = item.event;
@@ -372,6 +388,7 @@ export class T3Client {
               event.payload,
             ];
           }
+          if (field === 'turnItems' && event.payload?.id) applyAssistantText(p, event.payload);
           if (event.type === "thread.updated") {
             p.thread = normalizeThread(event.payload);
             this.threads = this.threads.map(thread => thread.id === p.thread.id ? p.thread : thread);

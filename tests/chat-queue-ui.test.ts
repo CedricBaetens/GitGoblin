@@ -38,8 +38,7 @@ it('renders the production queue controls and sends edits, reorder, steer and ca
     (host.querySelector('[aria-label^="Reorder"]')!).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
     await flush();
     expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'queued-run.reorder', runId: 'queued', beforeRunId: null }));
-    (Array.from(host.querySelectorAll('button')).find(button => button.textContent?.includes('Steer'))!).click();
-    await flush();
+    await click('Steer queued message');
     expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'queued-message.promote-to-steer', queuedRunId: 'queued', targetRunId: 'active' }));
     await click('Remove queued message');
     expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'queued-run.cancel', runId: 'queued' }));

@@ -39,9 +39,9 @@ function reorder(index: number, direction: number) {
       <AppButton v-if="rows.some(row => row.run.queueHeld)" :disabled="disabled || pending" @click="action('queue.resume')">Resume queue</AppButton>
     </div>
     <ol v-if="expanded" class="m-0 max-h-[240px] overflow-auto list-none p-0">
-      <li v-for="(row, index) in rows" :key="row.run.id" class="flex items-start gap-2 border-t border-[#353d4d] px-3 py-2" @dragover.prevent @drop.prevent="dragged && action('queued-run.reorder', { runId: dragged, beforeRunId: row.run.id }); dragged = ''">
-        <AppButton aria-label="Reorder queued message (drag or press arrow keys)" title="Drag or move with Up/Down arrow keys" :draggable="!disabled && !pending" @dragstart="dragged = row.run.id" @dragend="dragged = ''" :disabled="disabled || pending" @keydown.up.prevent="reorder(index, -1)" @keydown.down.prevent="reorder(index, 1)"><GripVertical :size="14" /></AppButton>
-        <div class="min-w-0 flex-1">
+      <li v-for="(row, index) in rows" :key="row.run.id" class="flex items-start gap-1 border-t border-[#353d4d] px-3 py-2" @dragover.prevent @drop.prevent="dragged && action('queued-run.reorder', { runId: dragged, beforeRunId: row.run.id }); dragged = ''">
+        <AppButton size="icon" class="shrink-0" aria-label="Reorder queued message (drag or press arrow keys)" title="Drag or move with Up/Down arrow keys" :draggable="!disabled && !pending" @dragstart="dragged = row.run.id" @dragend="dragged = ''" :disabled="disabled || pending" @keydown.up.prevent="reorder(index, -1)" @keydown.down.prevent="reorder(index, 1)"><GripVertical :size="14" /></AppButton>
+        <div class="min-w-0 flex-1 pt-[4px]">
           <template v-if="editing === row.run.id">
             <AppTextarea v-model="text" aria-label="Edit queued message" :disabled="pending" />
             <AppButton :disabled="disabled || pending || (!text.trim() && !row.message?.attachments?.length)" @click="action('queued-run.edit', { runId: row.run.id, text })">Save</AppButton>
@@ -53,9 +53,11 @@ function reorder(index: number, direction: number) {
             <span v-if="row.run.queueHeld" class="text-[#9eadc8]">Queue paused</span>
           </template>
         </div>
-        <AppButton aria-label="Edit queued message" title="Edit queued message" :disabled="disabled || pending || !row.message" @click="editing = row.run.id; text = row.message?.text || ''"><Pencil :size="14" /></AppButton>
-        <AppButton :disabled="disabled || pending || !active" title="Send into the current task" @click="action('queued-message.promote-to-steer', { queuedRunId: row.run.id, targetRunId: active })"><CornerUpRight :size="14" /> Steer</AppButton>
-        <AppButton aria-label="Remove queued message" title="Remove from queue" :disabled="disabled || pending" @click="action('queued-run.cancel', { runId: row.run.id })"><X :size="14" /></AppButton>
+        <div class="flex shrink-0 items-center gap-[2px]">
+          <AppButton size="icon" aria-label="Edit queued message" title="Edit queued message" :disabled="disabled || pending || !row.message" @click="editing = row.run.id; text = row.message?.text || ''"><Pencil :size="14" /></AppButton>
+          <AppButton size="icon" aria-label="Steer queued message" :disabled="disabled || pending || !active" title="Steer: send into the current task" @click="action('queued-message.promote-to-steer', { queuedRunId: row.run.id, targetRunId: active })"><CornerUpRight :size="14" /></AppButton>
+          <AppButton size="icon" aria-label="Remove queued message" title="Remove from queue" :disabled="disabled || pending" @click="action('queued-run.cancel', { runId: row.run.id })"><X :size="14" /></AppButton>
+        </div>
       </li>
     </ol>
   </section>

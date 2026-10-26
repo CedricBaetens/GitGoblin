@@ -37,6 +37,32 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("T3 client contract", () => {
+  it.each([false, true])('displays assistant turn-item text before completion (reconnect=%s)', async reconnect => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    client.selectThread('one');
+    const socket = FakeSocket.latest;
+    const requestId = socket.sent.at(-1).id;
+    const receive = (item: unknown) => socket.receive({ _tag: 'Chunk', requestId, values: [item] });
+    const item = { id: 'item', messageId: 'reply', type: 'assistant_message', runId: 'run',
+      startedAt: '2026-10-26T08:00:00Z', updatedAt: '2026-10-26T08:00:01Z', text: 'Hel', streaming: true };
+    receive({ kind: 'snapshot', projection: { thread: { id: 'one' }, messages: [], turnItems: reconnect ? [item] : [], runtimeRequests: [] } });
+    if (!reconnect) receive({ kind: 'event', event: { type: 'turn-item.created', payload: item } });
+    expect(client.projection?.messages).toMatchObject([{ id: 'reply', role: 'assistant', text: 'Hel', streaming: true, createdAt: item.startedAt }]);
+    receive({ kind: 'event', event: { type: 'turn-item.updated', payload: { ...item, text: 'Hello' } } });
+    expect(client.projection?.messages).toHaveLength(1);
+    expect(client.projection?.messages[0]?.text).toBe('Hello');
+    receive({ kind: 'event', event: { type: 'message.updated', payload: {
+      id: 'reply', role: 'assistant', text: 'Hello world', streaming: false, createdAt: item.startedAt,
+      updatedAt: '2026-10-26T08:00:02Z',
+    } } });
+    receive({ kind: 'event', event: { type: 'turn-item.updated', payload: { ...item, text: 'Hello world', streaming: false } } });
+    expect(client.projection?.messages).toMatchObject([{ id: 'reply', text: 'Hello world', streaming: false }]);
+    expect(client.projection?.messages).toHaveLength(1);
+    receive({ kind: 'event', event: { type: 'turn-item.updated', payload: item } });
+    expect(client.projection?.messages).toMatchObject([{ id: 'reply', text: 'Hello world', streaming: false }]);
+  });
   it('preserves projects and threads on partial repository identity refreshes', async () => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);
