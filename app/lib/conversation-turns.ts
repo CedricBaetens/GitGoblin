@@ -1,4 +1,5 @@
 import type { T3Message, T3Projection } from './types';
+import { chatSubagents } from './chat-subagents';
 import { chatActivities } from './chat-activity';
 
 export function conversationTurns(projection: T3Projection | undefined, activeRunId?: string | null) {
@@ -13,6 +14,8 @@ export function conversationTurns(projection: T3Projection | undefined, activeRu
     const start = group[0]!.createdAt;
     const end = groups[index + 1]?.[0]?.createdAt;
     const runIds = new Set(group.flatMap(message => message.runId || message.turnId ? [message.runId || message.turnId] : []));
+    for (const run of projection?.runs || [])
+      if (group.some(message => message.id === run.userMessageId)) runIds.add(run.id);
     if (index === groups.length - 1 && activeRunId) runIds.add(activeRunId);
     const belongs = (run: unknown, date: unknown) => run && runIds.has(String(run)) || typeof date === 'string' && date >= start && (!end || date < end);
     const activities = chatActivities(projection && {
@@ -20,6 +23,9 @@ export function conversationTurns(projection: T3Projection | undefined, activeRu
       activities: projection.activities?.filter(item => belongs(item.turnId, item.createdAt)),
       turnItems: projection.turnItems?.filter(item => belongs(item.runId, item.startedAt || item.createdAt)),
     }, null, false);
+    const subagents = chatSubagents(projection).filter(agent => agent.runId
+      ? runIds.has(agent.runId)
+      : belongs(null, agent.startedAt || agent.updatedAt));
     const assistants = group.filter(message => message.role === 'assistant');
     const running = index === groups.length - 1 && (!!activeRunId || assistants.some(message => message.streaming));
     const final = assistants.at(-1);
@@ -27,7 +33,7 @@ export function conversationTurns(projection: T3Projection | undefined, activeRu
     const lastTime = final?.updatedAt || final?.createdAt;
     const seconds = lastTime ? Math.max(0, Math.round((Date.parse(lastTime) - Date.parse(start)) / 1000)) : NaN;
     const duration = Number.isFinite(seconds) ? seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s` : '';
-    return { id: group[0]!.id, users: group.filter(message => message.role === 'user'), work, final, activities,
+    return { id: group[0]!.id, users: group.filter(message => message.role === 'user'), work, final, activities: activities.filter(activity => !subagents.some(agent => agent.itemId === activity.id)), subagents,
       summary: running ? 'Working…' : duration ? `Worked for ${duration}` : 'Work details' };
   });
 }

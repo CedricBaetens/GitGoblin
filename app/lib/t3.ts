@@ -354,6 +354,7 @@ export class T3Client {
             p.activities = [...(p.activities || []).filter(value => value.id !== activity.id), activity];
           }
           const fields: Record<string, string> = {
+            "subagent.updated": "subagents",
             "run.created": "runs",
             "run.updated": "runs",
             "message.created": "messages",

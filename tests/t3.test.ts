@@ -482,6 +482,11 @@ describe("T3 client contract", () => {
     const run = { id: 'queued', userMessageId: 'message', status: 'queued', queuePosition: 1 };
     receive({ kind: 'event', event: { type: 'run.created', payload: run } });
     expect(client.projection?.runs).toEqual([run]);
+    const agent = { id: 'child', runId: 'queued', title: 'Review code', status: 'running' };
+    receive({ kind: 'event', event: { type: 'subagent.updated', payload: agent } });
+    expect(client.projection?.subagents).toEqual([agent]);
+    receive({ kind: 'event', event: { type: 'subagent.updated', payload: { ...agent, status: 'completed', result: 'Reviewed' } } });
+    expect(client.projection?.subagents).toEqual([{ ...agent, status: 'completed', result: 'Reviewed' }]);
     receive({ kind: 'event', event: { type: 'run.updated', payload: { ...run, status: 'running' } } });
     expect(client.projection?.runs).toEqual([{ ...run, status: 'running' }]);
     const sent = client.sendMessage({ ...thread, status: 'idle' }, 'follow up');

@@ -152,7 +152,22 @@ export interface T3Run {
   queueHeld?: boolean;
   startedAt?: string | null;
 }
+export interface T3Subagent {
+  id: string;
+  runId?: string | null;
+  title?: string | null;
+  prompt?: string;
+  status: string;
+  model?: string | null;
+  modelSelection?: T3ModelSelection;
+  progress?: string;
+  result?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt?: string;
+}
 export interface T3Projection {
+  subagents?: T3Subagent[];
   runs?: T3Run[];
   thread: T3Thread;
   messages: T3Message[];

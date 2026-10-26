@@ -1007,6 +1007,7 @@ defineExpose({
             </template>
             <ChatMarkdown :text="message.text" />
           </div>
+          <ChatSubagents :agents="turn.subagents" />
           <details
             v-if="turn.work.length || turn.activities.length"
             class="work-details mt-[8px] mx-0 mb-[12px] text-[#8e9bb4] [&_summary]:flex [&_summary]:items-center [&_summary]:gap-[5px] [&_summary]:w-[fit-content] [&_summary]:py-[8px] [&_summary]:px-0 [&_summary]:cursor-pointer [&_summary]:text-[12px] [&_summary]:list-none [&_summary::-webkit-details-marker]:hidden [&[open]_summary_svg]:rotate-90 [&_summary:hover]:text-[#c1c9dc]"
