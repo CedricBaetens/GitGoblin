@@ -303,6 +303,11 @@ fn open_editor(repo: String, path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    shell::open_external_url(&url)
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     #[cfg(debug_assertions)]
@@ -356,6 +361,7 @@ fn main() {
             repository_names_load,
             repository_names_save,
             open_editor,
+            open_external_url,
             full_path,
             reveal_path
         ])

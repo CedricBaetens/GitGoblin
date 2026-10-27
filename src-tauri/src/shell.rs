@@ -1,5 +1,30 @@
 use std::{path::{Path, PathBuf}, process::Command};
 
+fn external_url(url: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(url).map_err(|_| "Invalid link.".to_string())?;
+    if !matches!(url.scheme(), "https" | "http" | "mailto") {
+        return Err("Only web and email links can be opened.".into());
+    }
+    Ok(url)
+}
+
+pub fn open_external_url(url: &str) -> Result<(), String> {
+    let url = external_url(url)?;
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    command.arg(url.as_str()).spawn().map_err(|e| format!("Could not open link: {e}"))?;
+    Ok(())
+}
+
 pub fn worktree_path(repo: &str, path: &str) -> Result<PathBuf, String> {
     let root = std::fs::canonicalize(repo).map_err(|e| e.to_string())?;
     if !root.is_dir() { return Err("Choose a repository folder.".into()); }
@@ -49,6 +74,15 @@ pub fn reveal(target: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_opens_web_and_email_urls() {
+        for url in ["https://example.com/path?q=a&b=c#section", "http://localhost:1420", "mailto:hello@example.com"] {
+            assert!(external_url(url).is_ok());
+        }
+        for url in ["javascript:alert(1)", "file:///C:/Windows/test.exe", "C:/Windows/test.exe", "relative/path", "data:text/html,test"] {
+            assert!(external_url(url).is_err());
+        }
+    }
     #[test]
     fn resolves_files_folders_and_deleted_paths_without_allowing_escape() {
         let dir = tempfile::tempdir().unwrap();
