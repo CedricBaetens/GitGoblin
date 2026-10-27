@@ -205,7 +205,7 @@ function toggle(path: string) {
       @contextmenu="openMenu($event, row)"
     >
       <AppButton
-        class="compact-file-row [.segmented_button&.active]:bg-[#292d38] [.segmented_button&.active]:text-[#d1d8ed] [.segmented_button&.active]:shadow-[0_1px_3px_#0004] flex-1 min-w-0 flex w-full min-h-[25px] h-[25px] py-[3px] px-[8px] gap-[6px] text-left justify-start rounded-[4px] text-[11px] [&.active]:bg-[#252a39] [&.active]:text-[#d3dffa] [&>svg]:text-[#7c8bb0] [&.folder]:text-[#a5aebf]"
+        class="compact-file-row transition-none [.segmented_button&.active]:bg-[#292d38] [.segmented_button&.active]:text-[#d1d8ed] [.segmented_button&.active]:shadow-[0_1px_3px_#0004] flex-1 min-w-0 flex w-full min-h-[25px] h-[25px] py-[3px] px-[8px] gap-[6px] text-left justify-start rounded-[4px] text-[11px] [&.active]:bg-[#252a39] [&.active]:text-[#d3dffa] [&>svg]:text-[#7c8bb0] [&.folder]:text-[#a5aebf]"
         :class="[
           { active: row.file && picked.has(row.path), folder: !row.file },
         ]"
