@@ -516,12 +516,6 @@ const canCommit = computed(
     !!commitMessage.value.trim() &&
     !snapshot.value?.files.some((file) => file.conflict),
 );
-async function openNewConversation(event: MouseEvent) {
-  const trigger = event.currentTarget as HTMLButtonElement;
-  chatVisible.value = true;
-  await nextTick();
-  chat.value?.newConversation(trigger);
-}
 const threads = ref<T3Thread[]>([]),
   projects = ref<T3Project[]>([]),
   t3Connected = ref(false);
@@ -1269,7 +1263,7 @@ onUnmounted(() => {
     class="app-shell grid grid-cols-[var(--sidebar)_minmax(0,_1fr)] grid-rows-[var(--titlebar-height)_auto_minmax(0,_1fr)] h-[100dvh] overflow-hidden [&_.badge]:text-[9px] [&_.badge]:bg-[#242831] [&_.badge]:text-[#a1a8ba] [&_.badge]:py-[3px] [&_.badge]:px-[5px] [&_.badge]:rounded-[4px] [&_.graph-line.last]:bottom-[50%] [--pane-heading-height:68px] [&.resizing-sidebar]:cursor-col-resize! [&.resizing-sidebar]:select-none! [&.resizing-sidebar_*]:cursor-col-resize! [&.resizing-sidebar_*]:select-none!"
     :class="[{ 'resizing-sidebar': resizingSidebar }]"
     :style="{
-      '--sidebar': `${sidebarWidth}px`,
+      '--sidebar': chatVisible ? '0px' : `${sidebarWidth}px`,
       '--files-width': filesWidth === undefined ? undefined : `${filesWidth}px`,
       '--details-height':
         detailsHeight === undefined ? undefined : `${detailsHeight}px`,
@@ -1401,7 +1395,6 @@ onUnmounted(() => {
           @select="selectChat"
           @close="closeChat"
           @move="(id, target) => (chatTabs = moveChatTab(chatTabs, id, target))"
-          @new="openNewConversation"
         />
         <PopoverPortal
           ><PopoverContent
@@ -1645,6 +1638,7 @@ onUnmounted(() => {
       </div>
     </div>
     <aside
+      v-show="!chatVisible"
       id="repository-sidebar"
       class="sidebar relative min-w-0 bg-[#14171e] border-r-[1px] border-solid border-r-[var(--line)] flex flex-col min-h-0 [&.chat-mode>.sidebar-scroll]:flex-[0_1_auto] [&.chat-mode>.sidebar-scroll]:max-h-[170px] [&.chat-mode>.sidebar-scroll]:pb-[8px] [&.chat-mode_.nav-section]:my-[4px] [&.chat-mode_.nav-section]:mx-0 [&.chat-mode_.nav-section]:pt-0 [&.chat-mode_.nav-section]:[border-top:0] [&>.chat-panel]:flex-1 [&>.chat-panel]:[border-left:0] [&>.chat-panel]:[border-top:0] [&_.tree-row.current-worktree]:text-[#d8e4ff] [&_.tree-row.current-worktree]:bg-[#202c3f] [&_.current-worktree_.tiny-label]:text-[#c3d2ff] [&_.current-worktree_.tiny-label]:bg-[#354665] [&_.current-worktree_.tiny-label]:py-[2px] [&_.current-worktree_.tiny-label]:px-[5px] [&_.current-worktree_.tiny-label]:rounded-[4px] [&_.worktree-row]:pt-[8px] [&_.worktree-row]:pb-[8px] [&_.worktree-name]:flex [&_.worktree-name]:flex-col [&_.worktree-name]:items-start [&_.worktree-name]:flex-1 [&_.worktree-name]:min-w-0 [&_.worktree-name]:gap-[4px] [&_.worktree-name_strong]:text-[11px] [&_.worktree-name_strong]:font-semibold [&_.worktree-name_strong]:max-w-full [&_.worktree-name_strong]:overflow-hidden [&_.worktree-name_strong]:text-ellipsis [&_.worktree-name_small]:text-[10px] [&_.worktree-name_small]:text-[#96a7c3] [&_.worktree-name_small]:max-w-full [&_.worktree-name_small]:flex-none [&_.worktree-row_.tiny-label]:shrink-0 [&_.nav-section>.section-heading:not(:first-child)]:border-t-[1px] [&_.nav-section>.section-heading:not(:first-child)]:border-solid [&_.nav-section>.section-heading:not(:first-child)]:border-t-[#2c3341] [&_.nav-section>.section-heading:not(:first-child)]:mt-[12px] [&_.nav-section>.section-heading:not(:first-child)]:pt-[12px] [&_.nav-section>.section-heading:not(:first-child)]:rounded-none [&_button:focus-visible]:[outline:2px_solid_#a7b6ff] [&_button:focus-visible]:outline-offset-[-2px] [&_summary:focus-visible]:[outline:2px_solid_#a7b6ff] [&_summary:focus-visible]:outline-offset-[-2px]"
       :class="{ 'chat-mode': chatVisible }"
@@ -1972,6 +1966,8 @@ onUnmounted(() => {
     </aside>
     <main
       ref="workspace"
+      id="git-workspace"
+      style="grid-column: 2"
       class="workspace flex flex-col min-h-0 min-w-0 bg-[#111216] relative"
       aria-label="Git workspace"
     >

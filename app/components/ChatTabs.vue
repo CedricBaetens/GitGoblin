@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { TabsList, TabsRoot, TabsTrigger } from "reka-ui";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ChevronDown, MessageSquare, Plus, Search, X } from "lucide-vue-next";
+import { ChevronDown, MessageSquare, Search, X } from "lucide-vue-next";
 import type { T3Project, T3Thread } from "~/lib/types";
-import { chatHistory } from "~/lib/chat-tabs";
-import { isThreadRunning, repositoryThreadKey } from "~/lib/threads";
+import { isThreadRunning, repositoryThreadKey, visibleThreads } from "~/lib/threads";
 import type { ContextMenuHandle, ContextMenuItem } from "~/lib/context-menu";
 const props = defineProps<{
   ids: string[];
@@ -23,7 +22,6 @@ const emit = defineEmits<{
   select: [id: string];
   close: [id: string];
   move: [id: string, target: string];
-  new: [event: MouseEvent];
   error: [message: string];
 }>();
 const strip = ref<HTMLElement>(),
@@ -88,7 +86,7 @@ const groups = computed(() => {
     ? tabs.value
     : archived.value
       ? props.threads.filter((thread) => !thread.deletedAt)
-      : chatHistory(props.threads);
+      : visibleThreads(props.threads);
   const grouped = new Map<
     string,
     { key: string; name: string; path: string; threads: T3Thread[] }
@@ -210,7 +208,7 @@ defineExpose({ openAll, closePicker: () => (pickerOpen.value = false) });
                 role="tab"
                 aria-haspopup="menu"
                 :aria-selected="selected === thread.id"
-                aria-controls="conversation-panel"
+                aria-controls="git-workspace"
                 :tabindex="selected === thread.id ? 0 : -1"
                 :disabled="disabled"
                 :title="`${root(thread)}\n${thread.worktreePath || ''}\n${thread.title}`"
@@ -267,15 +265,6 @@ defineExpose({ openAll, closePicker: () => (pickerOpen.value = false) });
         <ChevronDown :size="16" />
       </AppButton>
       <AppButton
-        variant="primary"
-        class="primary new-chat-button [border-color:#adbbff] shrink-0 h-[32px] text-[11px]"
-        aria-label="New chat"
-        :disabled="disabled"
-        @click="emit('new', $event)"
-      >
-        <Plus :size="15" />New chat
-      </AppButton>
-      <AppButton
         class="all-chats-button shrink-0 text-[11px] gap-[5px]"
         aria-haspopup="dialog"
         @click="openAll()"
@@ -319,7 +308,7 @@ defineExpose({ openAll, closePicker: () => (pickerOpen.value = false) });
             <label
               v-if="!openOnly"
               class="archive-filter flex items-center gap-[8px] text-[12px] text-[#aab6ce]"
-              ><AppInput v-model="archived" type="checkbox" />Include archived
+              ><AppInput v-model="archived" type="checkbox" />Include settled and archived
               chats</label
             >
             <div class="chat-picker-results min-h-[90px] overflow-y-auto">
@@ -377,7 +366,7 @@ defineExpose({ openAll, closePicker: () => (pickerOpen.value = false) });
                 {{
                   search
                     ? "No chats match your search."
-                    : "No chats to show. Connect T3 Code or start a new chat."
+                    : "No chats to show. Connect T3 Code or start a chat there."
                 }}
               </AppHint>
             </div>

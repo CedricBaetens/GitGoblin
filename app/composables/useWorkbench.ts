@@ -129,7 +129,7 @@ export function useWorkbench() {
       diff.value = demoDiff;
       return;
     }
-    if (!background || switchedFile) diffLoading.value = true;
+    if (!background || switchedFile) diffLoading.value = !diffCache.get(key);
     try {
       const next = await diffCache.load(key, () => read<Diff>("diff", {
         path: file,
