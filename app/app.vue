@@ -1972,7 +1972,7 @@ onUnmounted(() => {
       aria-label="Git workspace"
     >
       <template v-if="snapshot">
-        <template v-if="view === 'changes'">
+        <template v-if="chatVisible || view === 'changes'">
           <div
             v-if="!chatVisible"
             class="changes-title flex items-center justify-between py-[10px] px-[16px] gap-[12px] [&_p]:text-[10px] [&_p]:text-[#747b8b] [&_p]:mt-[3px] [@media(min-width:1650px)]:py-[10px] [@media(min-width:1650px)]:px-[16px] [@media(max-width:1250px)]:py-[10px] [@media(max-width:1250px)]:px-[16px] [&_h1]:text-[13px] [&_h1]:tracking-normal h-[var(--pane-heading-height)] min-h-[var(--pane-heading-height)] shrink-0 border-b-[1px] border-solid border-b-[var(--line)]"
